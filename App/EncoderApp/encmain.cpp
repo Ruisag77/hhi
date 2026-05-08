@@ -1,0 +1,441 @@
+/* The copyright in this software is being made available under the BSD
+ * License, included below. This software may be subject to other third party
+ * and contributor rights, including patent rights, and no such rights are
+ * granted under this license.
+ *
+ * Copyright (c) 2010-2023, ITU/ISO/IEC
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions are met:
+ *
+ *  * Redistributions of source code must retain the above copyright notice,
+ *    this list of conditions and the following disclaimer.
+ *  * Redistributions in binary form must reproduce the above copyright notice,
+ *    this list of conditions and the following disclaimer in the documentation
+ *    and/or other materials provided with the distribution.
+ *  * Neither the name of the ITU/ISO/IEC nor the names of its contributors may
+ *    be used to endorse or promote products derived from this software without
+ *    specific prior written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS
+ * BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+ * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+ * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+ * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+ * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+ * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF
+ * THE POSSIBILITY OF SUCH DAMAGE.
+ */
+
+/** \file     encmain.cpp
+    \brief    Encoder application main
+*/
+
+#include <time.h>
+#include <iostream>
+#include <chrono>
+#include <ctime>
+
+#include "EncoderLib/EncLibCommon.h"
+#include "EncApp.h"
+#include "CommonLib/AlfParameters.h"
+#include "CommonLib/CodingStatistics.h"
+#include "Utilities/program_options_lite.h"
+
+//! \ingroup EncoderApp
+//! \{
+
+static constexpr uint32_t settingNameWidth  = 66;
+static constexpr uint32_t settingValueWidth = 3;
+// ---------------------------------------------------------------------------------------------------------------------
+// //
+
+// macro value printing function
+#if defined(_DEBUG) || 1
+#define ENABLE_TRY_CATCH 0
+#else
+#define ENABLE_TRY_CATCH 1
+#endif
+
+#define PRINT_CONSTANT(NAME, NAME_WIDTH, VALUE_WIDTH) \
+  std::cout << std::setw(NAME_WIDTH) << #NAME << " = " << std::setw(VALUE_WIDTH) << NAME << std::endl;
+
+static void printMacroSettings()
+{
+  if (g_verbosity >= DETAILS)
+  {
+    std::cout << "Non-environment-variable-controlled macros set as follows: \n" << std::endl;
+
+    //------------------------------------------------
+
+    // setting macros
+
+    PRINT_CONSTANT(RExt__DECODER_DEBUG_BIT_STATISTICS, settingNameWidth, settingValueWidth);
+
+    //------------------------------------------------
+
+    std::cout << std::endl;
+  }
+}
+
+#if JVET_Z0150_MEMORY_USAGE_PRINT
+#ifdef __linux
+#include <cstdlib>
+#include <cstdio>
+#include <cstring>
+
+int getProcStatusValue(const char *key)
+{
+  FILE *file   = fopen("/proc/self/status", "r");
+  int   result = -1;
+  char  line[128];
+
+  size_t len = strlen(key);
+  while (fgets(line, 128, file) != nullptr)
+  {
+    if (strncmp(line, key, len) == 0)
+    {
+      result = atoi(line + len);
+      break;
+    }
+  }
+  fclose(file);
+  return result;
+}
+#endif
+#endif
+
+// ====================================================================================================================
+// Main function
+// ====================================================================================================================
+
+int main(int argc, char *argv[])
+{
+  // print information
+  fprintf(stdout, "\n");
+  fprintf(stdout, "NextSoftware2: Encoder Version %s ", NX2_VERSION);
+  fprintf(stdout, NVM_ONOS);
+  fprintf(stdout, NVM_COMPILEDBY);
+  fprintf(stdout, NVM_BITS);
+#if ENABLE_SIMD_OPT
+  std::string                       SIMD = "";
+  df::program_options_lite::Options opts;
+  opts.addOptions()("SIMD", SIMD, "")("c", df::program_options_lite::parseConfigFile, "");
+  df::program_options_lite::SilentReporter err;
+  df::program_options_lite::scanArgv(opts, argc, (const char **)argv, err);
+  fprintf(stdout, "[SIMD=%s] ", read_x86_extension(SIMD));
+#endif
+#if ENABLE_TRACING
+  fprintf(stdout, "[ENABLE_TRACING] ");
+#endif
+  fprintf(stdout, "\n");
+
+  std::fstream bitstream;
+  EncLibCommon encLibCommon;
+
+  std::vector<EncApp *> pcEncApp(1);
+  bool                  resized  = false;
+  int                   layerIdx = 0;
+
+  initROM();
+
+  char **layerArgv = new char *[argc];
+
+  do
+  {
+    pcEncApp[layerIdx] = new EncApp(bitstream, &encLibCommon);
+
+    // parse configuration per layer
+    try
+    {
+      int j = 0;
+      for (int i = 0; i < argc; i++)
+      {
+        if (argv[i][0] == '-' && argv[i][1] == 'l')
+        {
+          if (argc <= i + 1)
+          {
+            THROW("Command line parsing error: missing parameter after -lx\n");
+          }
+          int               numParams = 1;   // count how many parameters are consumed
+          // check for long parameters, which start with "--"
+          const std::string param     = argv[i + 1];
+          if (param.rfind("--", 0) != 0)
+          {
+            // only short parameters have a second parameter for the value
+            if (argc <= i + 2)
+            {
+              THROW("Command line parsing error: missing parameter after -lx\n");
+            }
+            numParams++;
+          }
+          // check if correct layer index
+          if (argv[i][2] == std::to_string(layerIdx).c_str()[0])
+          {
+            layerArgv[j] = argv[i + 1];
+            if (numParams > 1)
+            {
+              layerArgv[j + 1] = argv[i + 2];
+            }
+            j += numParams;
+          }
+          i += numParams;
+        }
+        else
+        {
+          layerArgv[j] = argv[i];
+          j++;
+        }
+      }
+
+      if (!pcEncApp[layerIdx]->parseCfg(j, layerArgv))
+      {
+        return 1;
+      }
+
+      pcEncApp[layerIdx]->createLib(layerIdx);
+
+      if (!resized)
+      {
+        pcEncApp.resize(pcEncApp[layerIdx]->getMaxLayers());
+        resized = true;
+      }
+    }
+    catch (df::program_options_lite::ParseFailure &e)
+    {
+      std::cerr << "Error parsing option \"" << e.arg << "\" with argument \"" << e.val << "\"." << std::endl;
+      return 1;
+    }
+#if ENABLE_TRY_CATCH
+    catch (const std::bad_alloc &e)
+    {
+      std::cerr << "Memory allocation failed: " << e.what() << std::endl;
+      return EXIT_FAILURE;
+    }
+    catch (std::exception &e)
+    {
+      std::cerr << "Exception: " << e.what() << std::endl;
+      return EXIT_FAILURE;
+    }
+    catch (...)
+    {
+      std::cerr << "unknown exception" << std::endl;
+      return EXIT_FAILURE;
+    }
+#endif
+
+    layerIdx++;
+  } while (layerIdx < pcEncApp.size());
+
+  delete[] layerArgv;
+
+  if (layerIdx > 1)
+  {
+    int                                                     nbLayersUsingAlf = 0;
+    int                                                     totalUsedAPSIDs  = 0;
+    std::array<uint8_t, AlfParameters::ALF_CTB_MAX_NUM_APS> usedAlfAps;
+    usedAlfAps.fill(0);
+    bool overlapAPS = false;
+    for (uint32_t i = 0; i < layerIdx; i++)
+    {
+      if (pcEncApp[i]->getALFEnabled())
+      {
+        nbLayersUsingAlf++;
+        totalUsedAPSIDs += pcEncApp[i]->getMaxNumALFAPS();
+        for (int apsid = 0; apsid < pcEncApp[i]->getMaxNumALFAPS(); apsid++)
+        {
+          usedAlfAps[apsid + pcEncApp[i]->getALFAPSIDShift()]++;
+          if (usedAlfAps[apsid + pcEncApp[i]->getALFAPSIDShift()] > 1)
+          {
+            overlapAPS = true;
+          }
+        }
+      }
+    }
+    if (totalUsedAPSIDs > AlfParameters::ALF_CTB_MAX_NUM_APS || overlapAPS)
+    {
+      msg(WARNING,
+          "Number of configured ALF APS Ids exceeds maximum for multilayer, or overlap APS Ids - reconfiguring with "
+          "automatic settings\n");
+      int apsShift = 0;
+      for (uint32_t i = 0; i < layerIdx; i++)
+      {
+        if (pcEncApp[i]->getALFEnabled())
+        {
+          int nbAPS = pcEncApp[i]->getMaxNumALFAPS();
+          if (totalUsedAPSIDs > AlfParameters::ALF_CTB_MAX_NUM_APS)
+          {
+            nbAPS = std::min(nbAPS, std::max(1, AlfParameters::ALF_CTB_MAX_NUM_APS / nbLayersUsingAlf));
+            nbAPS = std::min(nbAPS, AlfParameters::ALF_CTB_MAX_NUM_APS - apsShift);
+          }
+          msg(WARNING, "\tlayer %d : %d: %d -> %d \n", i, nbAPS, apsShift, apsShift + nbAPS - 1);
+          pcEncApp[i]->forceMaxNumALFAPS(nbAPS);
+          pcEncApp[i]->forceALFAPSIDShift(apsShift);
+          apsShift += nbAPS;
+        }
+      }
+    }
+    VPS *vps = pcEncApp[0]->getVPS();
+    // check chroma format and bit-depth for dependent layers
+    for (uint32_t i = 0; i < layerIdx; i++)
+    {
+      const ChromaFormat curLayerChromaFormatIdc = pcEncApp[i]->getChromaFormatIDC();
+      int                curLayerBitDepth        = pcEncApp[i]->getBitDepth();
+      for (uint32_t j = 0; j < layerIdx; j++)
+      {
+        if (vps->m_vpsDirectRefLayerFlag[i][j])
+        {
+          const ChromaFormat refLayerChromaFormatIdcInVPS = pcEncApp[j]->getChromaFormatIDC();
+          CHECK(curLayerChromaFormatIdc != refLayerChromaFormatIdcInVPS,
+                "The chroma formats of the current layer and the reference layer are different");
+          int refLayerBitDepthInVPS = pcEncApp[j]->getBitDepth();
+          CHECK(curLayerBitDepth != refLayerBitDepthInVPS,
+                "The bit-depth of the current layer and the reference layer are different");
+        }
+      }
+    }
+  }
+
+#if PRINT_MACRO_VALUES
+  printMacroSettings();
+#endif
+
+  // starting time
+  auto        startTime  = std::chrono::steady_clock::now();
+  std::time_t startTime2 = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+  fprintf(stdout, " started @ %s", std::ctime(&startTime2));
+  clock_t startClock = clock();
+
+  // call encoding function per layer
+  bool eos = false;
+
+  while (!eos)
+  {
+    // read GOP
+    bool keepLoop = true;
+    while (keepLoop)
+    {
+      for (auto &encApp: pcEncApp)
+      {
+#if ENABLE_TRY_CATCH
+        try
+        {
+#endif
+          keepLoop = encApp->encodePrep(eos);
+#if ENABLE_TRY_CATCH
+        }
+        catch (const std::bad_alloc &e)
+        {
+          std::cerr << "Memory allocation failed: " << e.what() << std::endl;
+          return EXIT_FAILURE;
+        }
+        catch (std::exception &e)
+        {
+          std::cerr << "Exception: " << e.what() << std::endl;
+          return EXIT_FAILURE;
+        }
+        catch (...)
+        {
+          std::cerr << "unknown exception" << std::endl;
+          return EXIT_FAILURE;
+        }
+#endif
+      }
+    }
+
+    // encode GOP
+    keepLoop = true;
+    while (keepLoop)
+    {
+      for (auto &encApp: pcEncApp)
+      {
+#if ENABLE_TRY_CATCH
+        try
+        {
+#endif
+          keepLoop = encApp->encode();
+#if ENABLE_TRY_CATCH
+        }
+        catch (const std::bad_alloc &e)
+        {
+          std::cerr << "Memory allocation failed: " << e.what() << std::endl;
+          return EXIT_FAILURE;
+        }
+        catch (std::exception &e)
+        {
+          std::cerr << "Exception: " << e.what() << std::endl;
+          return EXIT_FAILURE;
+        }
+        catch (...)
+        {
+          std::cerr << "unknown exception" << std::endl;
+          return EXIT_FAILURE;
+        }
+#endif
+      }
+    }
+  }
+  for (auto &encApp: pcEncApp)
+  {
+    if (encApp->getNNPostFilterEnabled())
+    {
+      encApp->applyNnPostFilter();
+    }
+  }
+
+#if JVET_Z0150_MEMORY_USAGE_PRINT
+#ifdef __linux
+  int vm = getProcStatusValue("VmPeak:");
+  int rm = getProcStatusValue("VmHWM:");
+  printf("\nMemory Usage: VmPeak= %d KB ( %.1f GiB ),  VmHWM= %d KB ( %.1f GiB )\n", vm, (double)vm / (1024 * 1024), rm,
+         (double)rm / (1024 * 1024));
+#endif
+#endif
+
+  // ending time
+  clock_t     endClock = clock();
+  auto        endTime  = std::chrono::steady_clock::now();
+  std::time_t endTime2 = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+#if JVET_O0756_CALCULATE_HDRMETRICS
+  auto metricTime = pcEncApp[0]->getMetricTime();
+
+  for (int layerIdx = 1; layerIdx < pcEncApp.size(); layerIdx++)
+  {
+    metricTime += pcEncApp[layerIdx]->getMetricTime();
+  }
+  auto totalTime      = std::chrono::duration_cast<std::chrono::milliseconds>(endTime - startTime).count();
+  auto encTime        = std::chrono::duration_cast<std::chrono::milliseconds>(endTime - startTime - metricTime).count();
+  auto metricTimeuser = std::chrono::duration_cast<std::chrono::milliseconds>(metricTime).count();
+#else
+  auto encTime = std::chrono::duration_cast<std::chrono::milliseconds>(endTime - startTime).count();
+#endif
+  for (auto &encApp: pcEncApp)
+  {
+    encApp->destroyLib();
+    delete encApp;
+  }
+
+  // destroy ROM
+  destroyROM();
+
+  pcEncApp.clear();
+
+  printf("\n finished @ %s", std::ctime(&endTime2));
+
+#if JVET_O0756_CALCULATE_HDRMETRICS
+  printf(" Encoding Time (Total Time): %12.3f ( %12.3f ) sec. [user] %12.3f ( %12.3f ) sec. [elapsed]\n",
+         ((endClock - startClock) * 1.0 / CLOCKS_PER_SEC) - (metricTimeuser / 1000.0),
+         (endClock - startClock) * 1.0 / CLOCKS_PER_SEC, encTime / 1000.0, totalTime / 1000.0);
+#else
+  printf(" Total Time: %12.3f sec. [user] %12.3f sec. [elapsed]\n", (endClock - startClock) * 1.0 / CLOCKS_PER_SEC,
+         encTime / 1000.0);
+#endif
+
+  return 0;
+}
+
+//! \}
