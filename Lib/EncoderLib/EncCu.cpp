@@ -40,6 +40,7 @@
 #include "EncLib.h"
 #include "Analyze.h"
 #include "AQp.h"
+#include "EncCfg.h"
 
 #include "CommonLib/dtrace_codingstruct.h"
 #include "CommonLib/Picture.h"
@@ -51,9 +52,193 @@
 #include <stdio.h>
 #include <cmath>
 #include <algorithm>
+#include <cerrno>
+#include <cstdio>
+#include <map>
+#include <mutex>
+#include <string>
+#include <utility>
+
+#if defined(_WIN32)
+#include <direct.h>
+#else
+#include <sys/stat.h>
+#include <sys/types.h>
+#endif
 
 //! \ingroup EncoderLib
 //! \{
+
+namespace
+{
+static const char *FINAL_PLANAR_LOG_DIR = "div2k_planar";
+
+struct FinalPlanarLogEntry
+{
+  FILE *fp { nullptr };
+  bool  headerWritten { false };
+};
+
+std::mutex                                                g_finalPlanarLogMutex;
+std::map<std::pair<std::string, int>, FinalPlanarLogEntry> g_finalPlanarLogs;
+bool                                                      g_finalPlanarLogDirCreated = false;
+
+bool createFinalPlanarLogDir()
+{
+  if (g_finalPlanarLogDirCreated)
+  {
+    return true;
+  }
+
+#if defined(_WIN32)
+  const int ret = _mkdir(FINAL_PLANAR_LOG_DIR);
+#else
+  const int ret = mkdir(FINAL_PLANAR_LOG_DIR, 0777);
+#endif
+  if (ret == 0 || errno == EEXIST)
+  {
+    g_finalPlanarLogDirCreated = true;
+    return true;
+  }
+
+  std::fprintf(stderr, "Failed to create %s directory for final Planar log\n", FINAL_PLANAR_LOG_DIR);
+  return false;
+}
+
+std::string getFinalPlanarLogSequenceName(const std::string &inputFileName)
+{
+  const size_t slashPos = inputFileName.find_last_of("/\\");
+  const size_t namePos  = slashPos == std::string::npos ? 0 : slashPos + 1;
+  std::string  name     = inputFileName.substr(namePos);
+  const size_t dotPos   = name.find_last_of('.');
+  if (dotPos != std::string::npos)
+  {
+    name = name.substr(0, dotPos);
+  }
+  return name.empty() ? std::string("sequence") : name;
+}
+
+FinalPlanarLogEntry *getOrCreateFinalPlanarLogEntry(const std::string &sequenceName, const int qp)
+{
+  if (!createFinalPlanarLogDir())
+  {
+    return nullptr;
+  }
+
+  const auto key = std::make_pair(sequenceName, qp);
+  auto       it  = g_finalPlanarLogs.find(key);
+  if (it != g_finalPlanarLogs.end())
+  {
+    return &it->second;
+  }
+
+  const std::string path =
+    std::string(FINAL_PLANAR_LOG_DIR) + "/" + sequenceName + "_qp" + std::to_string(qp) + ".log";
+  FinalPlanarLogEntry entry;
+  entry.fp = std::fopen(path.c_str(), "w");
+  if (!entry.fp)
+  {
+    std::fprintf(stderr, "Failed to open final Planar log file: %s\n", path.c_str());
+    return nullptr;
+  }
+
+  auto inserted = g_finalPlanarLogs.emplace(key, entry);
+  return &inserted.first->second;
+}
+
+bool isSpecialIntraModeForPlanarLog(const CodingUnit &cu)
+{
+  return cu.mipFlag || cu.eipFlag || cu.sgpm || cu.dimdFlag || cu.timdFlag || cu.timdSadFlag || cu.obicFlag ||
+         cu.bdpcmMode[0] != BdpcmMode::NONE || cu.multiRefIdx != 0;
+}
+
+int classifyFinalPlanarNeighborMode(const CodingUnit *neighborCu)
+{
+  if (!neighborCu || !CU::isIntra(*neighborCu))
+  {
+    return 0;
+  }
+  if (isSpecialIntraModeForPlanarLog(*neighborCu))
+  {
+    return 4;
+  }
+
+  const uint32_t intraDir = neighborCu->intraDir[ChannelType::LUMA];
+  if (intraDir == PLANAR_IDX)
+  {
+    return 1;
+  }
+  if (intraDir == DC_IDX)
+  {
+    return 2;
+  }
+  return intraDir < NUM_LUMA_MODE ? 3 : 4;
+}
+
+bool isFinalBestPlanarBlock(const CodingUnit &cu)
+{
+  return CU::isIntra(cu) && !isSpecialIntraModeForPlanarLog(cu) && cu.intraDir[ChannelType::LUMA] == PLANAR_IDX;
+}
+
+void logFinalPlanarBlockSample(const CodingUnit &cu, const EncCfg *encCfg)
+{
+  if (!encCfg || !cu.cs || !cu.slice || !cu.Y().valid())
+  {
+    return;
+  }
+
+  const CompArea &area = cu.block(COMP_Y);
+  const Position  a0   = area.bottomLeft().offset(-1, 1);
+  const Position  a1   = area.bottomLeft().offset(-1, 0);
+  const Position  b0   = area.topRight().offset(1, -1);
+  const Position  b1   = area.topRight().offset(0, -1);
+  const Position  b2   = area.topLeft().offset(-1, -1);
+  const Position  b3   = area.topLeft().offset(0, -1);
+
+  const CodingUnit *cuA0 = cu.cs->getCURestricted(a0, cu, ChannelType::LUMA);
+  const CodingUnit *cuA1 = cu.cs->getCURestricted(a1, cu, ChannelType::LUMA);
+  const CodingUnit *cuB0 = cu.cs->getCURestricted(b0, cu, ChannelType::LUMA);
+  const CodingUnit *cuB1 = cu.cs->getCURestricted(b1, cu, ChannelType::LUMA);
+  const CodingUnit *cuB2 = cu.cs->getCURestricted(b2, cu, ChannelType::LUMA);
+  const CodingUnit *cuB3 = cu.cs->getCURestricted(b3, cu, ChannelType::LUMA);
+
+  std::lock_guard<std::mutex> lock(g_finalPlanarLogMutex);
+
+  const std::string    sequenceName = getFinalPlanarLogSequenceName(encCfg->m_inputFileName);
+  FinalPlanarLogEntry *entry        = getOrCreateFinalPlanarLogEntry(sequenceName, encCfg->m_iQP);
+  if (!entry || !entry->fp)
+  {
+    return;
+  }
+
+  if (!entry->headerWritten)
+  {
+    std::fprintf(entry->fp,
+                 "# mode_class: 0=unavailable_or_non_intra, 1=planar, 2=dc, 3=angular, 4=special_or_other\n");
+    std::fprintf(entry->fp, "poc x y width height block_qp file_qp is_planar A0 A1 B0 B1 B2 B3\n");
+    entry->headerWritten = true;
+  }
+
+  std::fprintf(entry->fp, "%d %d %d %u %u %d %d %d %d %d %d %d %d %d\n", cu.slice->m_poc, area.x, area.y,
+               area.width, area.height, cu.qp, encCfg->m_iQP, isFinalBestPlanarBlock(cu) ? 1 : 0,
+               classifyFinalPlanarNeighborMode(cuA0), classifyFinalPlanarNeighborMode(cuA1),
+               classifyFinalPlanarNeighborMode(cuB0), classifyFinalPlanarNeighborMode(cuB1),
+               classifyFinalPlanarNeighborMode(cuB2), classifyFinalPlanarNeighborMode(cuB3));
+  std::fflush(entry->fp);
+}
+
+void logFinalPlanarCodingStructure(const CodingStructure &finalCS, const CodingStructure &pictureCS, const EncCfg *encCfg)
+{
+  for (const CodingUnit *cu: finalCS.cus)
+  {
+    if (cu && cu->Y().valid())
+    {
+      const CodingUnit *pictureCu = pictureCS.getCU(cu->Y().pos(), ChannelType::LUMA);
+      logFinalPlanarBlockSample(pictureCu ? *pictureCu : *cu, encCfg);
+    }
+  }
+}
+}   // namespace
 
 // ====================================================================================================================
 
@@ -263,6 +448,7 @@ void EncCu::compressCtu(CodingStructure &cs, const UnitArea &area, const unsigne
   const bool copyUnsplitCTUSignals = bestCS->cus.size() == 1;
   cs.useSubStructure(*bestCS, partitioner.chType, CS::getArea(*bestCS, area, partitioner.chType), copyUnsplitCTUSignals,
                      false, false, copyUnsplitCTUSignals, true);
+  logFinalPlanarCodingStructure(*bestCS, cs, m_encCfg);
 
   if (CS::isDualITree(cs) && isChromaEnabled(cs.pcv->chrFormat))
   {
