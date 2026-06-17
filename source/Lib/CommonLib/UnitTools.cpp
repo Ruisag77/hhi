@@ -628,6 +628,55 @@ int PU::getIntraMPMs(const CodingUnit &cu, uint8_t *mpm, uint8_t *non_mpm)
     }
   }
 
+  // === MPM Optimization A1 (revised): inject neighbors' secondary fused direction ===
+  // Background: when a neighbor used DIMD / TIMD / OBIC, its predictor is a fusion of
+  // two intra directions stored in derivedIpm[0] (primary) and derivedIpm[1] (secondary).
+  // getIntraDirLuma() above already returns derivedIpm[0] (== intraDir[LUMA] for the
+  // primary). The secondary direction is currently discarded even though it is the
+  // 2nd best gradient/template direction for that neighbor's region and is therefore
+  // a strong prior for the current CU sharing the same texture continuity.
+  //
+  // Safety properties:
+  //   * Uses only reconstructed neighbor state (derivedIpm[1], dimdFlag/timdFlag/obicFlag)
+  //     - identical on encoder and decoder.
+  //   * Never reads any field of the current CU (no reentrancy w.r.t. TIMD derivation
+  //     which itself calls getIntraMPMs).
+  //   * Conservative: only injects when isBlend was true (derivedIpm[1] != derivedIpm[0]),
+  //     when the value lies in the valid 67-mode luma range, and when not already present.
+  auto injectNeighborSecondary = [&](const CodingUnit *neighbor)
+  {
+    if (numValidMPM >= NUM_MOST_PROBABLE_MODES)
+    {
+      return;
+    }
+    if (!neighbor || !CU::isIntra(*neighbor))
+    {
+      return;
+    }
+    if (!(neighbor->dimdFlag || neighbor->timdFlag || neighbor->obicFlag))
+    {
+      return;
+    }
+    const int8_t sec = neighbor->derivedIpm[1];
+    if (sec <= 0 || sec >= NUM_LUMA_MODE)   // skip invalid (-1), PLANAR (0 already in mpm[0])
+    {
+      return;
+    }
+    if (sec == neighbor->derivedIpm[0])     // non-blend: nothing new
+    {
+      return;
+    }
+    if (!includedMode[(uint8_t)sec])
+    {
+      mpm[numValidMPM]                = (uint8_t)sec;
+      includedMode[(uint8_t)sec]      = true;
+      ++numValidMPM;
+    }
+  };
+  injectNeighborSecondary(puLeft);
+  injectNeighborSecondary(puAbove && CU::isSameCtu(cu, *puAbove) ? puAbove : nullptr);
+  // === end A1 ===
+
   int       numCand = -1;
   const int numMPMs = NUM_MOST_PROBABLE_MODES;
   CHECK(2 >= numMPMs, "Invalid number of most probable modes");
