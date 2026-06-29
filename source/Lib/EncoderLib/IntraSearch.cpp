@@ -793,8 +793,8 @@ bool IntraSearch::estIntraPredLumaQT(CodingUnit &cu, Partitioner &partitioner, C
       }
       if (m_encCfg->m_bFastUDIUseMPMEnabled)
       {
-        int numCand    = cuCtxIntra.mpmListSize;
-        numCand        = (numCand > 2) ? 2 : numCand;
+        constexpr int maxFastUdiMpmCand = 3;
+        int           numCand           = std::min(cuCtxIntra.mpmListSize, maxFastUdiMpmCand);
         cu.multiRefIdx = 0;
 
         for (int j = 0; j < numCand; j++)
