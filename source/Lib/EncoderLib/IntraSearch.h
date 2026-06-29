@@ -548,7 +548,8 @@ protected:
   template<typename T, size_t N>
   void xReduceHadCandList(static_vector<T, N> &candModeList, static_vector<double, N> &candCostList,
                           SortedPelUnitBufs &sortedPelBuffer, int &numModesForFullRD, const double thresholdHadCost,
-                          const double *mipHadCost, const CodingUnit &cu, const bool fastMip);
+                          const double *mipHadCost, const CodingUnit &cu, const bool fastMip,
+                          const int maxNumConvRDCand);
   void xDerivePLTLossy(CodingStructure &cs, Partitioner &partitioner, CompID compBegin, uint32_t numComp);
   void xCalcPixelPred(CodingStructure &cs, Partitioner &partitioner, uint32_t yPos, uint32_t xPos, CompID compBegin,
                       uint32_t numComp);

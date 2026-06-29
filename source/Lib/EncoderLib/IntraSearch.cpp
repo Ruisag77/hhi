@@ -255,6 +255,7 @@ bool IntraSearch::estIntraPredLumaQT(CodingUnit &cu, Partitioner &partitioner, C
   {
     numModesForFullRD = (numModesForFullRD > 1) ? (numModesForFullRD - 1) : numModesForFullRD;
   }
+  const int numRegularModesForFullRD = numModesForFullRD;
   SortedPelUnitBufs sortedPelUnitBufs(*pelUnitBufPool);
   int               bufferIdx = 0;
   CHECK(!cu.Y().valid(), "CU is not valid"); // this should always be true
@@ -338,6 +339,15 @@ bool IntraSearch::estIntraPredLumaQT(CodingUnit &cu, Partitioner &partitioner, C
           : (fastMip ? std::max(numModesForFullRD, floorLog2(std::min(cu.lwidth(), cu.lheight())) - 1)
                      : numModesForFullRD);
       }
+
+      constexpr double adaptiveIntraRDCandBestRatio     = 1.05;
+      constexpr double adaptiveIntraRDCandBoundaryRatio = 1.02;
+      const int        numModesForFullRDBase            = numModesForFullRD;
+      const int        adaptiveIntraRDCandNum =
+        (numRegularModesForFullRD < numModesAvailable && numModesForFullRD < FAST_UDI_MAX_RDMODE_NUM) ? 1 : 0;
+      int maxNumConvRDCand = numRegularModesForFullRD;
+      numModesForFullRD += adaptiveIntraRDCandNum;
+
       sortedPelUnitBufs.prepare(localUnitArea, area.area() > 128);
       const int numHadCand = (testMip ? 2 : 1) * 3;
 
@@ -492,6 +502,32 @@ bool IntraSearch::estIntraPredLumaQT(CodingUnit &cu, Partitioner &partitioner, C
         }
       }
 
+      if (adaptiveIntraRDCandNum > 0)
+      {
+        const int  extraCandPos = numRegularModesForFullRD;
+        const bool extraCandAvailable =
+          extraCandPos > 0 && rdModeList.size() > extraCandPos && candCostList.size() > extraCandPos;
+
+        const bool keepAdaptiveIntraRDCand =
+          extraCandAvailable &&
+          (candCostList[extraCandPos] <= candCostList[0] * adaptiveIntraRDCandBestRatio ||
+           candCostList[extraCandPos] <= candCostList[extraCandPos - 1] * adaptiveIntraRDCandBoundaryRatio);
+
+        if (keepAdaptiveIntraRDCand)
+        {
+          maxNumConvRDCand++;
+        }
+        else
+        {
+          numModesForFullRD = numModesForFullRDBase;
+          if (rdModeList.size() > static_cast<size_t>(numModesForFullRD))
+          {
+            rdModeList.resize(static_cast<size_t>(numModesForFullRD));
+            candCostList.resize(static_cast<size_t>(numModesForFullRD));
+          }
+        }
+      }
+
       CHECKD(rdModeList.size() != numModesForFullRD, "Error: RD mode list size");
 
       //*** Derive MIP candidates using Hadamard
@@ -550,7 +586,7 @@ bool IntraSearch::estIntraPredLumaQT(CodingUnit &cu, Partitioner &partitioner, C
 
         const double thresholdHadCost = 1.0 + 1.4 / sqrt((double)(cu.lwidth() * cu.lheight()));
         xReduceHadCandList(rdModeList, candCostList, sortedPelUnitBufs, numModesForFullRD, thresholdHadCost, mipHadCost,
-                           cu, fastMip);
+                           cu, fastMip, maxNumConvRDCand);
         cu.mipFlag = false;
       }
 
@@ -4717,7 +4753,7 @@ template<typename T, size_t N>
 void IntraSearch::xReduceHadCandList(static_vector<T, N> &candModeList, static_vector<double, N> &candCostList,
                                      SortedPelUnitBufs &sortedPelBuffer, int &numModesForFullRD,
                                      const double thresholdHadCost, const double *mipHadCost, const CodingUnit &cu,
-                                     const bool fastMip)
+                                     const bool fastMip, const int maxNumConvRDCand)
 {
   const int                                        maxCandPerType = numModesForFullRD >> 1;
   static_vector<ModeInfo, FAST_UDI_MAX_RDMODE_NUM> tempRdModeList;
@@ -4734,7 +4770,7 @@ void IntraSearch::xReduceHadCandList(static_vector<T, N> &candModeList, static_v
 
     if (!orgMode.mipFlg)
     {
-      addMode = (numConv < 3);
+      addMode = (numConv < maxNumConvRDCand);
       numConv += addMode ? 1 : 0;
     }
     else
