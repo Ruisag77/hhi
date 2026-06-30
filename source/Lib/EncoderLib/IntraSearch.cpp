@@ -793,8 +793,10 @@ bool IntraSearch::estIntraPredLumaQT(CodingUnit &cu, Partitioner &partitioner, C
       }
       if (m_encCfg->m_bFastUDIUseMPMEnabled)
       {
-        constexpr int maxFastUdiMpmCand = 3;
-        int           numCand           = std::min(cuCtxIntra.mpmListSize, maxFastUdiMpmCand);
+        constexpr int    numAlwaysAddFastUdiMpmCand = 2;
+        constexpr int    maxFastUdiMpmCand          = 3;
+        constexpr double extraMpmCostThresholdRatio  = 1.10;
+        int              numCand = std::min(cuCtxIntra.mpmListSize, maxFastUdiMpmCand);
         cu.multiRefIdx = 0;
 
         for (int j = 0; j < numCand; j++)
@@ -808,8 +810,41 @@ bool IntraSearch::estIntraPredLumaQT(CodingUnit &cu, Partitioner &partitioner, C
           }
           if (!mostProbableModeIncluded)
           {
-            numModesForFullRD++;
-            updateCandList(mostProbableMode, 0, rdModeList, candCostList, numModesForFullRD);
+            if (j < numAlwaysAddFastUdiMpmCand)
+            {
+              numModesForFullRD++;
+              updateCandList(mostProbableMode, 0, rdModeList, candCostList, numModesForFullRD);
+            }
+            else
+            {
+              cu.mipFlag                     = false;
+              cu.multiRefIdx                 = 0;
+              cu.plDir                       = PlanarDirType::NO_DIR;
+              cu.intraDir[ChannelType::LUMA] = cuCtxIntra.mpmList[j];
+
+              initIntraPatternChType(cu, cu.Y(), true);
+              initPredIntraParams(cu, cu.Y(), sps);
+
+              distParamHad.cur.buf = distParamSad.cur.buf = piPred.buf = sortedPelUnitBufs.getTestBuf().Y().buf;
+              predIntraAng(COMP_Y, piPred, cu, true, false);
+
+              Distortion minSadHad =
+                std::min(distParamSad.distFunc(distParamSad) * 2, distParamHad.distFunc(distParamHad));
+              uint64_t fracModeBits = xFracModeBitsIntra(cu, cuCtxIntra.mpmList[j], ChannelType::LUMA, cuCtxIntra);
+              double   cost         = double(minSadHad) + double(fracModeBits) * sqrtLambdaForFirstPass;
+              double   maxCost      = candCostList.empty() ? MAX_DOUBLE : candCostList.back() * extraMpmCostThresholdRatio;
+
+              if (cost <= maxCost)
+              {
+                ModeInfo extraMpmMode(false, false, 0, cuCtxIntra.mpmList[j], bufferIdx++);
+                int      insertPos = -1;
+
+                numModesForFullRD++;
+                updateCandList(extraMpmMode, cost, rdModeList, candCostList, numModesForFullRD, &insertPos);
+                updateCandList(extraMpmMode, double(minSadHad), hadModeList, candHadList, numHadCand);
+                sortedPelUnitBufs.insert(insertPos, rdModeList.size());
+              }
+            }
           }
         }
       }
