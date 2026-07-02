@@ -978,7 +978,9 @@ void TrQuant::getTrTypes(const TransformUnit &tu, const CompID compID, TransType
       return;
     }
 
-    if (!tu.cu->dimdFlag && !tu.cu->timdFlag && !tu.cu->obicFlag && !tu.cu->mipFlag && !tu.cu->sgpm)
+    const bool useDerivedIntraModes =
+      tu.cu->dimdFlag || tu.cu->timdFlag || tu.cu->obicFlag || tu.cu->mipFlag || tu.cu->sgpm || tu.cu->eipFlag;
+    if (!useDerivedIntraModes)
     {
       int predMode = PU::getWideAngle(tu, PU::getFinalIntraMode(*tu.cu, toChannelType(compID)), compID);
       CHECK(predMode < -(NUM_EXT_LUMA_MODE >> 1) || predMode >= NUM_LUMA_MODE + (NUM_EXT_LUMA_MODE >> 1),
@@ -1019,10 +1021,10 @@ void TrQuant::getTrTypes(const TransformUnit &tu, const CompID compID, TransType
     const int     absPModeDiff = abs(int(predModes.first) - int(predModes.second));
     const int     diffClass    = (absPModeDiff <= 8 ? 0 : absPModeDiff <= 16 ? 1 : 2);
     const int     pmodeIndex   = (predModeSym ? 34 * 2 - int(predModes.first) : int(predModes.first));
+    const bool    useDimdLikeTrSet = tu.cu->dimdFlag || tu.cu->obicFlag || tu.cu->eipFlag;
     const uint8_t trIndex =
-      (tu.cu->dimdFlag     ? g_aucIpmToTrSetModDimd[diffClass][std::min(11, blIndSize)][pmodeIndex]
+      (useDimdLikeTrSet    ? g_aucIpmToTrSetModDimd[diffClass][std::min(11, blIndSize)][pmodeIndex]
          : tu.cu->timdFlag ? g_aucIpmToTrSetModTimd[diffClass][std::min(9, blIndSize)][pmodeIndex]
-         : tu.cu->obicFlag ? g_aucIpmToTrSetModDimd[diffClass][std::min(11, blIndSize)][pmodeIndex]
          : tu.cu->mipFlag  ? g_aucIpmToTrSetModMip[diffClass][std::min(11, blIndSize)][pmodeIndex]
          : tu.cu->sgpm     ? g_aucIpmToTrSetModSgpm[diffClass][std::min(10, blIndSize)][pmodeIndex]
                            : 0);
