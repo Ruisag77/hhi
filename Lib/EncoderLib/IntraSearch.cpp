@@ -458,7 +458,16 @@ bool IntraSearch::estIntraPredLumaQT(CodingUnit &cu, Partitioner &partitioner, C
 
       cu.multiRefIdx             = 1;
       const int      numMPMs     = NUM_PRIMARY_MOST_PROBABLE_MODES;
-      const uint8_t *multiRefMPM = cuCtxIntra.mpmList;
+      uint8_t        multiRefMpm[NUM_PRIMARY_MOST_PROBABLE_MODES];
+      for (int idx = 0; idx < numMPMs; idx++)
+      {
+        multiRefMpm[idx] = cuCtxIntra.mpmList[idx];
+      }
+      if (multiRefMpm[0] != PLANAR_IDX && multiRefMpm[1] == PLANAR_IDX)
+      {
+        std::swap(multiRefMpm[0], multiRefMpm[1]);
+      }
+      const uint8_t *multiRefMPM = multiRefMpm;
 
       for (int mRefNum = 1; mRefNum < numOfPassesExtendRef; mRefNum++)
       {

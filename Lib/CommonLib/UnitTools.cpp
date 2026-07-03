@@ -46,6 +46,411 @@
 
 #include <utility>
 #include <algorithm>
+#include <cmath>
+
+namespace
+{
+static constexpr int    PLANAR_MPM_MODEL_NUM_FEATURES  = 43;
+static constexpr double PLANAR_MPM_MODEL_RAW_THRESHOLD = -1.80;
+
+struct PlanarMpmTree
+{
+  int            numNodes;
+  const int8_t  *splitFeature;
+  const double  *threshold;
+  const int16_t *leftChild;
+  const int16_t *rightChild;
+  const int8_t  *catIndex;
+  const double  *leafValue;
+  const uint32_t *catThreshold;
+};
+
+static const int8_t kPlanarMpmTree0Feature[] = {
+  27, 26, 29, 27, 1, 29, 28, 35, 8, 28, 27, 5, 8, 8, 25, 40,
+  27, 32, 29, 8, 29, 11, 8, 11, 5, 11, 20, 1, 10, 1, 19, 35,
+  13, 10, 18, 7, 26, 10, 20, 19, 8, 5, 29, 7, 1, 3, 1, 5,
+  10, 19, 17, 1, 3, 42, 13, 7, 28, 9, 29, 7, 5, 5
+};
+
+static const double kPlanarMpmTree0Threshold[] = {
+  1.0000000180025095e-35, 2.5000000000000004, 1.0000000180025095e-35, 2.5000000000000004,
+  1.0000000180025095e-35, 1.0000000180025095e-35, 1.0000000180025095e-35, 1.0000000180025095e-35,
+  0, 1.0000000180025095e-35, 1.5000000000000002, 31.500000000000004,
+  1, 2, 1.0000000180025095e-35, 1.0000000180025095e-35,
+  1.5000000000000002, 0.77500000000000013, 3.5000000000000004, 3,
+  1.0000000180025095e-35, 4, 5, 6,
+  26.500000000000004, 7, 12.000000000000002, 602.00000000000011,
+  8, 494.00000000000006, 6.0000000000000009, 1.0000000180025095e-35,
+  384.00000000000006, 9, 1.0000000180025095e-35, 10,
+  4.5000000000000009, 11, 6.0000000000000009, 6.0000000000000009,
+  12, 36.000000000000007, 1.0000000180025095e-35, 13,
+  1682.0000000000002, 6.0000000000000009, 542.00000000000011, 36.000000000000007,
+  14, 12.000000000000002, 3.0000000000000004, 526.00000000000011,
+  6.0000000000000009, 0.46232303497909272, 384.00000000000006, 15,
+  2.5000000000000004, 16, 3.5000000000000004, 17,
+  36.000000000000007, 36.000000000000007
+};
+
+static const int16_t kPlanarMpmTree0Left[] = {
+  1, 2, 6, 5, 36, 10, 8, 20, 11, 13, 19, 23, 33, 18, 15, -14,
+  22, 42, 21, 43, 45, 24, 55, 27, 30, 26, 47, -1, -21, -26, 51, 57,
+  37, -6, 50, 40, -3, 38, -31, -18, -20, -30, -9, -2, -40, -5, -28, -13,
+  -24, -17, -29, -4, -22, -19, -32, -7, -8, -12, -50, -33, -45, -48
+};
+
+static const int16_t kPlanarMpmTree0Right[] = {
+  3, 4, 9, 7, 12, 16, 56, 17, -10, -11, 31, 25, 14, -15, -16, 49,
+  39, 53, 35, 28, 52, -23, 48, -25, 29, -27, 46, 34, 41, 32, 54, 59,
+  -34, -35, -36, -37, -38, -39, 44, -41, -42, -43, -44, 60, -46, -47, 61, -49,
+  58, -51, -52, -53, -54, -55, -56, -57, -58, -59, -60, -61, -62, -63
+};
+
+static const int8_t kPlanarMpmTree0CatIndex[] = {
+  -1, -1, -1, -1, -1, -1, -1, -1, 0, -1, -1, -1, 1, 2, -1, -1,
+  -1, -1, -1, 3, -1, 4, 5, 6, -1, 7, -1, -1, 8, -1, -1, -1,
+  -1, 9, -1, 10, -1, 11, -1, -1, 12, -1, -1, 13, -1, -1, -1, -1,
+  14, -1, -1, -1, -1, -1, -1, 15, -1, 16, -1, 17, -1, -1
+};
+
+static const double kPlanarMpmTree0Leaf[] = {
+  -1.8678349051224874, -1.8241503134134842, -1.8516931026091112, -1.889560622427521,
+  -1.8078945525085421, -1.9752428965493058, -1.8392281720336796, -1.8519583571007008,
+  -1.7921580050302426, -1.9532847561851394, -1.868946296875112, -1.8187668381187767,
+  -1.8776328794337773, -1.9590658357708646, -1.9560554229760685, -1.9509402086031733,
+  -1.8925308382214652, -1.8295471022114902, -1.7709185715037641, -1.897233092740449,
+  -1.8839923396442699, -1.8279837581475569, -1.9449620977152511, -1.898686364279498,
+  -1.9432728893439337, -1.8932211260319445, -1.9445645471450228, -1.8824306976261695,
+  -1.8763459521890955, -1.8251978157977151, -1.8943194089343225, -1.8872605056626808,
+  -1.8083767122521488, -1.8826332656323279, -1.9564005148811112, -1.8710785687628191,
+  -1.9149352178342733, -1.9567542860217846, -1.9528673644301466, -1.9030803004594199,
+  -1.8201649963049469, -1.9085354172664566, -1.8363388990282883, -1.8025892351056818,
+  -1.8114607608996094, -1.8961457308689562, -1.7998769015708791, -1.8874686489546078,
+  -1.8848225927798476, -1.8443004100522347, -1.8637322634644127, -1.8853081396062463,
+  -1.8963413946545975, -1.8153101765142521, -1.7799267818125204, -1.862628591185902,
+  -1.8281885342603597, -1.8405674686029738, -1.8103643842029897, -1.8574130270030116,
+  -1.8012241578368391, -1.8221005577441758, -1.8941946846058129
+};
+
+static const uint32_t kPlanarMpmTree0CatThreshold[] = {
+  16, 1, 24, 6, 24, 6, 16, 16, 1, 1, 17, 24, 16, 16, 1, 24,
+  16, 18
+};
+
+static const int8_t kPlanarMpmTree1Feature[] = {
+  27, 38, 29, 27, 29, 28, 8, 1, 35, 1, 23, 8, 28, 5, 27, 38,
+  29, 27, 1, 8, 32, 8, 29, 8, 5, 20, 1, 8, 38, 1, 19, 37,
+  5, 18, 19, 20, 10, 35, 10, 21, 19, 8, 5, 17, 38, 21, 1, 1,
+  5, 29, 19, 1, 1, 7, 5, 42, 19, 19, 20, 4, 7, 8
+};
+
+static const double kPlanarMpmTree1Threshold[] = {
+  1.0000000180025095e-35, 2.5000000000000004, 1.0000000180025095e-35, 2.5000000000000004,
+  1.0000000180025095e-35, 1.0000000180025095e-35, 0, 1.0000000180025095e-35,
+  1.0000000180025095e-35, 1.0000000180025095e-35, 1.0000000180025095e-35, 1,
+  1.0000000180025095e-35, 31.500000000000004, 1.5000000000000002, 1.0000000180025095e-35,
+  3.5000000000000004, 1.5000000000000002, 1.0000000180025095e-35, 2,
+  0.77500000000000013, 3, 1.0000000180025095e-35, 4,
+  26.500000000000004, 12.000000000000002, 574.00000000000011, 5,
+  2.5000000000000004, 302.00000000000006, 6.0000000000000009, 1.5000000000000002,
+  36.000000000000007, 1.0000000180025095e-35, 24.000000000000004, 6.0000000000000009,
+  6, 1.0000000180025095e-35, 7, -1.0000000180025095e-35,
+  6.0000000000000009, 8, 36.000000000000007, 6.0000000000000009,
+  2.5000000000000004, -1.0000000180025095e-35, 1754.0000000000002, 546.00000000000011,
+  36.000000000000007, 1.0000000180025095e-35, 6.0000000000000009, 770.00000000000011,
+  482.00000000000006, 9, 26.500000000000004, 0.53206016849974425,
+  12.000000000000002, 6.0000000000000009, 6.0000000000000009, 6.0000000000000009,
+  10, 11
+};
+
+static const int16_t kPlanarMpmTree1Left[] = {
+  1, 9, 5, 4, 14, 6, 13, -8, 22, 36, 15, 18, 16, 26, 21, 19,
+  24, 23, -4, -11, 49, 53, 50, 60, 30, 48, -3, 38, -23, -26, 52, 41,
+  37, 43, 35, -31, -1, -16, -12, -37, -19, -18, -30, 54, -25, -27, 51, -47,
+  -15, -10, -5, -41, -13, -2, -28, -22, -32, -24, -29, -39, -6, -46
+};
+
+static const int16_t kPlanarMpmTree1Right[] = {
+  3, 2, 11, 8, 17, -7, 7, -9, 20, 10, 27, 12, -14, 25, 32, -17,
+  31, 40, -20, -21, 55, 28, 57, 44, 29, 45, 33, 58, 42, 34, 56, -33,
+  -34, -35, -36, 39, -38, 59, -40, 46, -42, -43, -44, -45, 61, 47, -48, -49,
+  -50, -51, -52, -53, -54, -55, -56, -57, -58, -59, -60, -61, -62, -63
+};
+
+static const int8_t kPlanarMpmTree1CatIndex[] = {
+  -1, -1, -1, -1, -1, -1, 0, -1, -1, -1, -1, 1, -1, -1, -1, -1,
+  -1, -1, -1, 2, -1, 3, -1, 4, -1, -1, -1, 5, -1, -1, -1, -1,
+  -1, -1, -1, -1, 6, -1, 7, -1, -1, 8, -1, -1, -1, -1, -1, -1,
+  -1, -1, -1, -1, -1, 9, -1, -1, -1, -1, -1, -1, 10, 11
+};
+
+static const double kPlanarMpmTree1Leaf[] = {
+  0.002766422754636501, 0.12280612659219763, 0.087586592264592256, 0.088781075654544017,
+  0.13617797679473259, 0.11086921623690381, 0.10287462303191096, 0.10806422160721198,
+  0.0099689106670025791, 0.14724555670386458, -0.012773501710708408, -0.0096643165134641072,
+  0.069237736758135479, 0.08689853007775282, 0.079110996856244925, 0.13312918632652945,
+  0.00027266567099356139, 0.064825875875176395, 0.11856266915260195, 0.0075034725994928197,
+  0.081192369704745193, 0.16090569409067518, 0.080182750275103701, 0.12113699128171181,
+  0.065499223610150606, 0.067811639166523538, 0.10124872014251277, 0.081877947427322226,
+  0.025401028762352687, 0.1220556790549876, 0.065067434585394435, 0.070240438819600418,
+  0.048402963092057952, 0.1270669050994484, 0.084706260560718061, 0.077878326940308953,
+  0.087905757984287139, 0.097481840978763334, 0.13520652847446871, 0.0089359732383898823,
+  0.060716341712175673, 0.12591348476385772, 0.053809128483274439, 0.11331357879216522,
+  0.057415128872546919, 0.10631235729487218, 0.074606594927712391, 0.064136056080840401,
+  0.067488271724641613, 0.072997400816388183, 0.13940595480579643, 0.14257483457662334,
+  0.056325573434880413, 0.063141053465022232, 0.13154611955051637, 0.077144421213636502,
+  0.15443382391507146, 0.081733913010308579, 0.13150104097631882, 0.01002533917023826,
+  0.14138160516667955, 0.11963456131243096, 0.070664940699118314
+};
+
+static const uint32_t kPlanarMpmTree1CatThreshold[] = {
+  16, 1, 1, 6, 6, 1, 1, 1, 16, 16, 24, 24
+};
+
+static const int8_t kPlanarMpmTree2Feature[] = {
+  27, 38, 29, 27, 2, 29, 8, 27, 30, 22, 8, 5, 29, 27, 27, 12,
+  22, 2, 11, 8, 11, 29, 37, 22, 8, 8, 13, 5, 11, 32, 2, 11,
+  2, 5, 38, 11, 29, 36, 20, 13, 36, 7, 5, 20, 36, 8, 18, 41,
+  11, 3, 39, 13, 8, 11, 36, 5, 38, 11, 11, 21, 20, 20
+};
+
+static const double kPlanarMpmTree2Threshold[] = {
+  1.0000000180025095e-35, 2.5000000000000004, 1.0000000180025095e-35, 2.5000000000000004,
+  1.0000000180025095e-35, 1.0000000180025095e-35, 0, 3.5000000000000004,
+  3.5000000000000004, 1.0000000180025095e-35, 1, 31.500000000000004,
+  3.5000000000000004, 1.5000000000000002, 1.5000000000000002, 2,
+  1.0000000180025095e-35, 1082.0000000000002, 3, 4,
+  5, 1.0000000180025095e-35, 1.0000000180025095e-35, 1.0000000180025095e-35,
+  6, 7, 384.00000000000006, 31.500000000000004,
+  8, 0.81666666666666676, 882.00000000000011, 9,
+  1150.0000000000002, 36.000000000000007, 2.5000000000000004, 10,
+  1.5000000000000002, 2.5000000000000004, 12.000000000000002, 1.0000000180025095e-35,
+  2.5000000000000004, 11, 36.000000000000007, 12.000000000000002,
+  1.5000000000000002, 12, 1.0000000180025095e-35, 2.7500000000000004,
+  13, 12.000000000000002, 1.0000000180025095e-35, 48.000000000000007,
+  14, 15, 3.5000000000000004, 36.000000000000007,
+  2.5000000000000004, 16, 17, -1.0000000180025095e-35,
+  6.0000000000000009, 6.0000000000000009
+};
+
+static const int16_t kPlanarMpmTree2Left[] = {
+  1, 4, 6, 5, 52, 13, 8, 21, -3, 18, 23, 28, 17, 19, 25, 24,
+  22, 20, -8, -2, -12, 37, -17, 31, -6, -7, 27, 35, 32, 54, 33, -4,
+  39, 58, -21, 36, -22, -5, -32, -10, -23, -14, 51, -34, -16, -43, -41, -38,
+  -19, -46, -49, -15, -1, 59, -9, -36, -27, -50, -13, -29, -61, -26
+};
+
+static const int16_t kPlanarMpmTree2Right[] = {
+  3, 2, 10, 7, 15, 14, 9, 29, 11, -11, 12, 30, 41, 42, 44, 16,
+  -18, 48, -20, 34, 26, 40, -24, -25, 61, 56, -28, 53, -30, -31, 38, -33,
+  43, -35, 55, -37, 47, -39, -40, 46, -42, 45, -44, -45, 49, -47, -48, 50,
+  57, -51, -52, -53, -54, -55, -56, -57, -58, -59, -60, 60, -62, -63
+};
+
+static const int8_t kPlanarMpmTree2CatIndex[] = {
+  -1, -1, -1, -1, -1, -1, 0, -1, -1, -1, 1, -1, -1, -1, -1, 2,
+  -1, -1, 3, 4, 5, -1, -1, -1, 6, 7, -1, -1, 8, -1, -1, 9,
+  -1, -1, -1, 10, -1, -1, -1, -1, -1, 11, -1, -1, -1, 12, -1, -1,
+  13, -1, -1, -1, 14, 15, -1, -1, -1, 16, 17, -1, -1, -1
+};
+
+static const double kPlanarMpmTree2Leaf[] = {
+  0.0069793690167844601, 0.11496613064770779, 0.095066716043343408, 0.071872486692285728,
+  0.12750301614328002, -0.0094817484275623171, 0.1043147785710372, 0.090354340723122678,
+  0.13256007340640028, 0.066540060822749825, 0.010747029386611181, 0.082091520855583536,
+  0.068654394496040175, 0.045464134488039938, 0.11757223126176976, 0.11181669434787635,
+  0.077266824389829181, 0.011984495678594007, 0.086789523140203828, 0.0062652170423966955,
+  0.073332007683422532, 0.061685969249096625, 0.12079764102348045, 0.010434614716704328,
+  0.0077451259144369431, 0.022809445351861066, 0.060531177213576814, 0.073936048846216962,
+  0.082295334411072063, 0.018951335958103607, 0.13888849575718912, 0.075603032417398727,
+  0.0031165418761621975, 0.083602222443463589, 0.060838173068925964, 0.10845075423789111,
+  0.018486696727130086, 0.060270444420276001, 0.1206761161438285, 0.067803138589686354,
+  0.074271417013175633, 0.10948737872765973, 0.060294770902136731, 0.1125661139606878,
+  0.075596381652203948, 0.10272701399713255, 0.05019860053683816, 0.078248676419096316,
+  0.051974546117782613, 0.063932922501186387, 0.11214807933092799, 0.057686843488184307,
+  0.1221231111567478, 0.081798495931269283, 0.01568280558412935, 0.12531422301569403,
+  0.10127298157949818, 0.095283305721938341, 0.022440005147626754, 0.015524538297988539,
+  0.059505668721558158, 0.052117703536391002, 0.0075127125980544475
+};
+
+static const uint32_t kPlanarMpmTree2CatThreshold[] = {
+  20, 1, 1, 1, 6, 4, 1, 6, 20, 1, 24, 24, 20, 4, 1, 24,
+  24, 20
+};
+
+static const PlanarMpmTree kPlanarMpmTrees[] = {
+  { 62, kPlanarMpmTree0Feature, kPlanarMpmTree0Threshold, kPlanarMpmTree0Left, kPlanarMpmTree0Right,
+    kPlanarMpmTree0CatIndex, kPlanarMpmTree0Leaf, kPlanarMpmTree0CatThreshold },
+  { 62, kPlanarMpmTree1Feature, kPlanarMpmTree1Threshold, kPlanarMpmTree1Left, kPlanarMpmTree1Right,
+    kPlanarMpmTree1CatIndex, kPlanarMpmTree1Leaf, kPlanarMpmTree1CatThreshold },
+  { 62, kPlanarMpmTree2Feature, kPlanarMpmTree2Threshold, kPlanarMpmTree2Left, kPlanarMpmTree2Right,
+    kPlanarMpmTree2CatIndex, kPlanarMpmTree2Leaf, kPlanarMpmTree2CatThreshold }
+};
+
+bool isSpecialIntraModeForPlanarMpmModel(const CodingUnit &cu)
+{
+  return cu.mipFlag || cu.eipFlag || cu.sgpm || cu.dimdFlag || cu.timdFlag || cu.timdSadFlag || cu.obicFlag ||
+         cu.bdpcmMode[0] != BdpcmMode::NONE || cu.multiRefIdx != 0;
+}
+
+int classifyPlanarMpmNeighborMode(const CodingUnit *neighborCu)
+{
+  if (!neighborCu || !CU::isIntra(*neighborCu))
+  {
+    return 0;
+  }
+  if (isSpecialIntraModeForPlanarMpmModel(*neighborCu))
+  {
+    return 4;
+  }
+
+  const uint32_t intraDir = neighborCu->intraDir[ChannelType::LUMA];
+  if (intraDir == PLANAR_IDX)
+  {
+    return 1;
+  }
+  if (intraDir == DC_IDX)
+  {
+    return 2;
+  }
+  return intraDir < NUM_LUMA_MODE ? 3 : 4;
+}
+
+double evalPlanarMpmTree(const PlanarMpmTree &tree, const double features[PLANAR_MPM_MODEL_NUM_FEATURES])
+{
+  int node = 0;
+  while (node >= 0)
+  {
+    CHECK(node >= tree.numNodes, "Invalid Planar MPM model node");
+    const int feature = tree.splitFeature[node];
+    bool      goLeft = false;
+
+    const int catIndex = tree.catIndex[node];
+    if (catIndex >= 0)
+    {
+      const int catValue = static_cast<int>(features[feature]);
+      goLeft = catValue >= 0 && catValue < 32 && ((tree.catThreshold[catIndex] >> catValue) & 1U) != 0;
+    }
+    else
+    {
+      goLeft = features[feature] <= tree.threshold[node];
+    }
+
+    node = goLeft ? tree.leftChild[node] : tree.rightChild[node];
+  }
+
+  return tree.leafValue[-node - 1];
+}
+
+void fillPlanarMpmModelFeatures(const CodingUnit &cu, double features[PLANAR_MPM_MODEL_NUM_FEATURES])
+{
+  const CompArea &area = cu.block(COMP_Y);
+
+  const Position neighborPos[6] = {
+    area.bottomLeft().offset(-1, 1), area.bottomLeft().offset(-1, 0), area.topRight().offset(1, -1),
+    area.topRight().offset(0, -1),  area.topLeft().offset(-1, -1),   area.topLeft().offset(0, -1)
+  };
+
+  int neighborMode[6];
+  for (int i = 0; i < 6; i++)
+  {
+    neighborMode[i] =
+      classifyPlanarMpmNeighborMode(cu.cs->getCURestricted(neighborPos[i], cu, ChannelType::LUMA));
+  }
+
+  int modeCount[5] = { 0, 0, 0, 0, 0 };
+  int modeSum      = 0;
+  for (int i = 0; i < 6; i++)
+  {
+    modeCount[neighborMode[i]]++;
+    modeSum += neighborMode[i];
+  }
+
+  const int    knownCount          = 6 - modeCount[0];
+  const int    leftPlanarCount     = (neighborMode[0] == 1 ? 1 : 0) + (neighborMode[1] == 1 ? 1 : 0);
+  const int    topPlanarCount      = (neighborMode[2] == 1 ? 1 : 0) + (neighborMode[3] == 1 ? 1 : 0) +
+                                (neighborMode[4] == 1 ? 1 : 0) + (neighborMode[5] == 1 ? 1 : 0);
+  const int    leftKnownCount      = (neighborMode[0] != 0 ? 1 : 0) + (neighborMode[1] != 0 ? 1 : 0);
+  const int    topKnownCount       = (neighborMode[2] != 0 ? 1 : 0) + (neighborMode[3] != 0 ? 1 : 0) +
+                                (neighborMode[4] != 0 ? 1 : 0) + (neighborMode[5] != 0 ? 1 : 0);
+  const double neighborModeMean    = double(modeSum) / 6.0;
+  double       neighborModeVarSum  = 0.0;
+  for (int i = 0; i < 6; i++)
+  {
+    const double diff = double(neighborMode[i]) - neighborModeMean;
+    neighborModeVarSum += diff * diff;
+  }
+
+  // MPM derivation is needed before cu_qp_delta is parsed, so this uses syntax-available slice QP.
+  const int sliceQp = cu.slice ? cu.slice->m_iSliceQpBase : cu.qp;
+  const int width   = int(area.width);
+  const int height  = int(area.height);
+
+  features[0]  = cu.slice ? cu.slice->m_poc : 0;
+  features[1]  = area.x;
+  features[2]  = area.y;
+  features[3]  = width;
+  features[4]  = height;
+  features[5]  = sliceQp;
+  features[6]  = sliceQp;
+  features[7]  = neighborMode[0];
+  features[8]  = neighborMode[1];
+  features[9]  = neighborMode[2];
+  features[10] = neighborMode[3];
+  features[11] = neighborMode[4];
+  features[12] = neighborMode[5];
+  features[13] = width * height;
+  features[14] = floorLog2(width);
+  features[15] = floorLog2(height);
+  features[16] = features[14] + features[15];
+  features[17] = height != 0 ? double(width) / double(height) : 0.0;
+  features[18] = width == height ? 1 : 0;
+  features[19] = std::min(width, height);
+  features[20] = std::max(width, height);
+  features[21] = 0;
+  features[22] = area.x % 64;
+  features[23] = area.y % 64;
+  features[24] = area.x % 32;
+  features[25] = area.y % 32;
+  features[26] = modeCount[0];
+  features[27] = modeCount[1];
+  features[28] = modeCount[2];
+  features[29] = modeCount[3];
+  features[30] = modeCount[4];
+  features[31] = knownCount;
+  features[32] = knownCount > 0 ? double(modeCount[1]) / double(knownCount) : 0.0;
+  features[33] = modeCount[1] > 0 ? 1 : 0;
+  features[34] = knownCount > 0 && modeCount[1] == knownCount ? 1 : 0;
+  features[35] = leftPlanarCount;
+  features[36] = topPlanarCount;
+  features[37] = leftKnownCount;
+  features[38] = topKnownCount;
+  features[39] = leftKnownCount == 2 && neighborMode[0] == neighborMode[1] ? 1 : 0;
+  features[40] = topKnownCount == 4 && neighborMode[2] == neighborMode[3] && neighborMode[2] == neighborMode[4] &&
+                   neighborMode[2] == neighborMode[5]
+                 ? 1
+                 : 0;
+  features[41] = neighborModeMean;
+  features[42] = std::sqrt(neighborModeVarSum / 5.0);
+}
+
+bool planarMpmModelPredictsPlanar(const CodingUnit &cu)
+{
+  if (!cu.cs || !cu.slice || !cu.Y().valid())
+  {
+    return true;
+  }
+
+  double features[PLANAR_MPM_MODEL_NUM_FEATURES];
+  fillPlanarMpmModelFeatures(cu, features);
+
+  double rawScore = 0.0;
+  for (const PlanarMpmTree &tree: kPlanarMpmTrees)
+  {
+    rawScore += evalPlanarMpmTree(tree, features);
+  }
+  return rawScore >= PLANAR_MPM_MODEL_RAW_THRESHOLD;
+}
+}   // namespace
 
 // CS tools
 
@@ -743,6 +1148,11 @@ int PU::getIntraMPMs(const CodingUnit &cu, uint8_t *mpm, uint8_t *non_mpm)
       {
         non_mpm[numNonMPM++] = idx;
       }
+    }
+
+    if (cu.multiRefIdx == 0 && mpm[0] == PLANAR_IDX && mpm[1] != PLANAR_IDX && !planarMpmModelPredictsPlanar(cu))
+    {
+      std::swap(mpm[0], mpm[1]);
     }
   }
   for (int i = 0; i < numMPMs; i++)

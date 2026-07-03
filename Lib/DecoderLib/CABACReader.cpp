@@ -1865,7 +1865,10 @@ void CABACReader::intra_luma_pred_mode(CodingUnit &cu)
       }
     }
     cu.lumaModeIdx = predIdx;
-    isPlanar       = (predIdx == 0);   // First MPM is always planar (not depnding on neighboring blocks)
+    uint8_t mpmPred[NUM_MOST_PROBABLE_MODES];
+    uint8_t nonMpmPred[NUM_NON_MPM_MODES];
+    PU::getIntraMPMs(cu, mpmPred, nonMpmPred);
+    isPlanar = mpmPred[predIdx] == PLANAR_IDX;
   }
   else
   {
