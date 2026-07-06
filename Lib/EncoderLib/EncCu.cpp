@@ -79,6 +79,53 @@ struct FinalPlanarLogEntry
   bool  headerWritten { false };
 };
 
+struct FinalPlanarNeighborLog
+{
+  int avail { 0 };
+  int predMode { -1 };
+  int modeClass { 0 };
+  int intraDirLuma { -1 };
+  int width { -1 };
+  int height { -1 };
+  int qp { -1 };
+  int depth { -1 };
+  int qtDepth { -1 };
+  int btDepth { -1 };
+  int mtDepth { -1 };
+  int sameSize { 0 };
+  int isPlanar { 0 };
+  int isDc { 0 };
+  int isAngular { 0 };
+  int isSpecial { 0 };
+  int mip { 0 };
+  int eip { 0 };
+  int sgpm { 0 };
+  int dimd { 0 };
+  int timd { 0 };
+  int timdSad { 0 };
+  int obic { 0 };
+  int bdpcm { 0 };
+  int multiRefIdx { 0 };
+  int plDir { -1 };
+};
+
+struct FinalPlanarNeighborStats
+{
+  int numAvail { 0 };
+  int numIntra { 0 };
+  int numPlanar { 0 };
+  int numDc { 0 };
+  int numAngular { 0 };
+  int numSpecial { 0 };
+  int numInter { 0 };
+  int numIbc { 0 };
+  int numPlt { 0 };
+  int numSameSize { 0 };
+  int numSameQp { 0 };
+  int numSmaller { 0 };
+  int numLarger { 0 };
+};
+
 std::mutex                                                g_finalPlanarLogMutex;
 std::map<std::pair<std::string, int>, FinalPlanarLogEntry> g_finalPlanarLogs;
 bool                                                      g_finalPlanarLogDirCreated = false;
@@ -175,6 +222,111 @@ int classifyFinalPlanarNeighborMode(const CodingUnit *neighborCu)
   return intraDir < NUM_LUMA_MODE ? 3 : 4;
 }
 
+FinalPlanarNeighborLog makeFinalPlanarNeighborLog(const CodingUnit *neighborCu, const CompArea &currArea)
+{
+  FinalPlanarNeighborLog log;
+  if (!neighborCu || !neighborCu->Y().valid())
+  {
+    return log;
+  }
+
+  const CompArea &area = neighborCu->block(COMP_Y);
+  log.avail            = 1;
+  log.predMode         = static_cast<int>(neighborCu->predMode);
+  log.modeClass        = classifyFinalPlanarNeighborMode(neighborCu);
+  log.width            = static_cast<int>(area.width);
+  log.height           = static_cast<int>(area.height);
+  log.qp               = neighborCu->qp;
+  log.depth            = neighborCu->depth;
+  log.qtDepth          = neighborCu->qtDepth;
+  log.btDepth          = neighborCu->btDepth;
+  log.mtDepth          = neighborCu->mtDepth;
+  log.sameSize         = area.width == currArea.width && area.height == currArea.height ? 1 : 0;
+
+  if (CU::isIntra(*neighborCu))
+  {
+    log.intraDirLuma = static_cast<int>(neighborCu->intraDir[ChannelType::LUMA]);
+    log.isSpecial    = isSpecialIntraModeForPlanarLog(*neighborCu) ? 1 : 0;
+    log.isPlanar     = log.modeClass == 1 ? 1 : 0;
+    log.isDc         = log.modeClass == 2 ? 1 : 0;
+    log.isAngular    = log.modeClass == 3 ? 1 : 0;
+    log.mip          = neighborCu->mipFlag ? 1 : 0;
+    log.eip          = neighborCu->eipFlag ? 1 : 0;
+    log.sgpm         = neighborCu->sgpm ? 1 : 0;
+    log.dimd         = neighborCu->dimdFlag ? 1 : 0;
+    log.timd         = neighborCu->timdFlag ? 1 : 0;
+    log.timdSad      = neighborCu->timdSadFlag ? 1 : 0;
+    log.obic         = neighborCu->obicFlag ? 1 : 0;
+    log.bdpcm        = neighborCu->bdpcmMode[0] != BdpcmMode::NONE ? 1 : 0;
+    log.multiRefIdx  = neighborCu->multiRefIdx;
+    log.plDir        = static_cast<int>(neighborCu->plDir);
+  }
+
+  return log;
+}
+
+void addFinalPlanarNeighborStats(FinalPlanarNeighborStats &stats, const FinalPlanarNeighborLog &log,
+                                 const CompArea &currArea, const int currQp)
+{
+  if (!log.avail)
+  {
+    return;
+  }
+
+  stats.numAvail++;
+  stats.numPlanar += log.isPlanar;
+  stats.numDc += log.isDc;
+  stats.numAngular += log.isAngular;
+  stats.numSpecial += log.isSpecial;
+  stats.numSameSize += log.sameSize;
+  stats.numSameQp += log.qp == currQp ? 1 : 0;
+
+  const int currAreaSize  = static_cast<int>(currArea.width * currArea.height);
+  const int neighAreaSize = log.width * log.height;
+  stats.numSmaller += neighAreaSize < currAreaSize ? 1 : 0;
+  stats.numLarger += neighAreaSize > currAreaSize ? 1 : 0;
+
+  switch (log.predMode)
+  {
+  case MODE_INTRA:
+    stats.numIntra++;
+    break;
+  case MODE_INTER:
+    stats.numInter++;
+    break;
+  case MODE_IBC:
+    stats.numIbc++;
+    break;
+  case MODE_PLT:
+    stats.numPlt++;
+    break;
+  default:
+    break;
+  }
+}
+
+void writeFinalPlanarNeighborHeader(FILE *fp, const char *prefix)
+{
+  std::fprintf(fp,
+               " %s_avail %s_pred_mode %s_mode_class %s_intra_dir_luma %s_width %s_height %s_qp %s_depth"
+               " %s_qt_depth %s_bt_depth %s_mt_depth %s_same_size %s_is_planar %s_is_dc %s_is_angular"
+               " %s_is_special %s_mip %s_eip %s_sgpm %s_dimd %s_timd %s_timd_sad %s_obic %s_bdpcm"
+               " %s_multi_ref_idx %s_pl_dir",
+               prefix, prefix, prefix, prefix, prefix, prefix, prefix, prefix, prefix, prefix, prefix, prefix,
+               prefix, prefix, prefix, prefix, prefix, prefix, prefix, prefix, prefix, prefix, prefix, prefix,
+               prefix, prefix);
+}
+
+void writeFinalPlanarNeighborValues(FILE *fp, const FinalPlanarNeighborLog &log)
+{
+  std::fprintf(fp,
+               " %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d",
+               log.avail, log.predMode, log.modeClass, log.intraDirLuma, log.width, log.height, log.qp, log.depth,
+               log.qtDepth, log.btDepth, log.mtDepth, log.sameSize, log.isPlanar, log.isDc, log.isAngular,
+               log.isSpecial, log.mip, log.eip, log.sgpm, log.dimd, log.timd, log.timdSad, log.obic, log.bdpcm,
+               log.multiRefIdx, log.plDir);
+}
+
 bool isFinalBestPlanarBlock(const CodingUnit &cu)
 {
   return CU::isIntra(cu) && !isSpecialIntraModeForPlanarLog(cu) && cu.intraDir[ChannelType::LUMA] == PLANAR_IDX;
@@ -202,6 +354,35 @@ void logFinalPlanarBlockSample(const CodingUnit &cu, const EncCfg *encCfg)
   const CodingUnit *cuB2 = cu.cs->getCURestricted(b2, cu, ChannelType::LUMA);
   const CodingUnit *cuB3 = cu.cs->getCURestricted(b3, cu, ChannelType::LUMA);
 
+  const FinalPlanarNeighborLog nA0 = makeFinalPlanarNeighborLog(cuA0, area);
+  const FinalPlanarNeighborLog nA1 = makeFinalPlanarNeighborLog(cuA1, area);
+  const FinalPlanarNeighborLog nB0 = makeFinalPlanarNeighborLog(cuB0, area);
+  const FinalPlanarNeighborLog nB1 = makeFinalPlanarNeighborLog(cuB1, area);
+  const FinalPlanarNeighborLog nB2 = makeFinalPlanarNeighborLog(cuB2, area);
+  const FinalPlanarNeighborLog nB3 = makeFinalPlanarNeighborLog(cuB3, area);
+
+  FinalPlanarNeighborStats neighborStats;
+  addFinalPlanarNeighborStats(neighborStats, nA0, area, cu.qp);
+  addFinalPlanarNeighborStats(neighborStats, nA1, area, cu.qp);
+  addFinalPlanarNeighborStats(neighborStats, nB0, area, cu.qp);
+  addFinalPlanarNeighborStats(neighborStats, nB1, area, cu.qp);
+  addFinalPlanarNeighborStats(neighborStats, nB2, area, cu.qp);
+  addFinalPlanarNeighborStats(neighborStats, nB3, area, cu.qp);
+
+  const PreCalcValues *pcv              = cu.cs->pcv;
+  const int            log2Width        = floorLog2(area.width);
+  const int            log2Height       = floorLog2(area.height);
+  const int            areaSize         = static_cast<int>(area.width * area.height);
+  const int            aspectRatioX100  = area.height ? static_cast<int>((area.width * 100) / area.height) : 0;
+  const int            ctuX             = pcv ? area.x >> pcv->maxCUWidthLog2 : 0;
+  const int            ctuY             = pcv ? area.y >> pcv->maxCUHeightLog2 : 0;
+  const int            xInCtu           = pcv ? area.x & pcv->maxCUWidthMask : area.x;
+  const int            yInCtu           = pcv ? area.y & pcv->maxCUHeightMask : area.y;
+  const int            isPicLeft        = area.x == 0 ? 1 : 0;
+  const int            isPicTop         = area.y == 0 ? 1 : 0;
+  const int            isPicRight       = pcv && area.x + static_cast<int>(area.width) >= static_cast<int>(pcv->lumaWidth);
+  const int            isPicBottom      = pcv && area.y + static_cast<int>(area.height) >= static_cast<int>(pcv->lumaHeight);
+
   std::lock_guard<std::mutex> lock(g_finalPlanarLogMutex);
 
   const std::string    sequenceName = getFinalPlanarLogSequenceName(encCfg->m_inputFileName);
@@ -214,16 +395,46 @@ void logFinalPlanarBlockSample(const CodingUnit &cu, const EncCfg *encCfg)
   if (!entry->headerWritten)
   {
     std::fprintf(entry->fp,
+                 "# pred_mode: 0=inter, 1=intra, 2=ibc, 3=plt, -1=unavailable\n");
+    std::fprintf(entry->fp,
                  "# mode_class: 0=unavailable_or_non_intra, 1=planar, 2=dc, 3=angular, 4=special_or_other\n");
-    std::fprintf(entry->fp, "poc x y width height block_qp file_qp is_planar A0 A1 B0 B1 B2 B3\n");
+    std::fprintf(entry->fp, "# pl_dir: -1=unavailable_or_non_intra, 0=no_dir, 1=horizontal, 2=vertical\n");
+    std::fprintf(entry->fp,
+                 "poc x y width height log2_width log2_height area aspect_ratio_x100 ctu_x ctu_y x_in_ctu"
+                 " y_in_ctu is_pic_left is_pic_top is_pic_right is_pic_bottom depth qt_depth bt_depth mt_depth"
+                 " split_series block_qp file_qp slice_type label_is_planar");
+    writeFinalPlanarNeighborHeader(entry->fp, "A0");
+    writeFinalPlanarNeighborHeader(entry->fp, "A1");
+    writeFinalPlanarNeighborHeader(entry->fp, "B0");
+    writeFinalPlanarNeighborHeader(entry->fp, "B1");
+    writeFinalPlanarNeighborHeader(entry->fp, "B2");
+    writeFinalPlanarNeighborHeader(entry->fp, "B3");
+    std::fprintf(entry->fp,
+                 " num_avail_neighbors num_intra_neighbors num_planar_neighbors num_dc_neighbors"
+                 " num_angular_neighbors num_special_neighbors num_inter_neighbors num_ibc_neighbors"
+                 " num_plt_neighbors num_same_size_neighbors num_same_qp_neighbors num_smaller_neighbors"
+                 " num_larger_neighbors\n");
     entry->headerWritten = true;
   }
 
-  std::fprintf(entry->fp, "%d %d %d %u %u %d %d %d %d %d %d %d %d %d\n", cu.slice->m_poc, area.x, area.y,
-               area.width, area.height, cu.qp, encCfg->m_iQP, isFinalBestPlanarBlock(cu) ? 1 : 0,
-               classifyFinalPlanarNeighborMode(cuA0), classifyFinalPlanarNeighborMode(cuA1),
-               classifyFinalPlanarNeighborMode(cuB0), classifyFinalPlanarNeighborMode(cuB1),
-               classifyFinalPlanarNeighborMode(cuB2), classifyFinalPlanarNeighborMode(cuB3));
+  std::fprintf(entry->fp,
+               "%d %d %d %u %u %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %llu %d %d %d %d",
+               cu.slice->m_poc, area.x, area.y, area.width, area.height, log2Width, log2Height, areaSize,
+               aspectRatioX100, ctuX, ctuY, xInCtu, yInCtu, isPicLeft, isPicTop, isPicRight ? 1 : 0,
+               isPicBottom ? 1 : 0, cu.depth, cu.qtDepth, cu.btDepth, cu.mtDepth,
+               static_cast<unsigned long long>(cu.splitSeries), cu.qp, encCfg->m_iQP,
+               static_cast<int>(cu.slice->m_eSliceType), isFinalBestPlanarBlock(cu) ? 1 : 0);
+  writeFinalPlanarNeighborValues(entry->fp, nA0);
+  writeFinalPlanarNeighborValues(entry->fp, nA1);
+  writeFinalPlanarNeighborValues(entry->fp, nB0);
+  writeFinalPlanarNeighborValues(entry->fp, nB1);
+  writeFinalPlanarNeighborValues(entry->fp, nB2);
+  writeFinalPlanarNeighborValues(entry->fp, nB3);
+  std::fprintf(entry->fp, " %d %d %d %d %d %d %d %d %d %d %d %d %d\n", neighborStats.numAvail,
+               neighborStats.numIntra, neighborStats.numPlanar, neighborStats.numDc, neighborStats.numAngular,
+               neighborStats.numSpecial, neighborStats.numInter, neighborStats.numIbc, neighborStats.numPlt,
+               neighborStats.numSameSize, neighborStats.numSameQp, neighborStats.numSmaller,
+               neighborStats.numLarger);
   std::fflush(entry->fp);
 }
 
