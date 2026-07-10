@@ -980,7 +980,11 @@ void TrQuant::getTrTypes(const TransformUnit &tu, const CompID compID, TransType
 
     if (!tu.cu->dimdFlag && !tu.cu->timdFlag && !tu.cu->obicFlag && !tu.cu->mipFlag && !tu.cu->sgpm)
     {
-      int predMode = PU::getWideAngle(tu, PU::getFinalIntraMode(*tu.cu, toChannelType(compID)), compID);
+      // EIP stores a candidate index in intraDir; use its inferred angular mode for transform selection.
+      const uint32_t intraMode =
+        tu.cu->eipFlag ? uint32_t(tu.cu->inferredDimdMode) : PU::getFinalIntraMode(*tu.cu, toChannelType(compID));
+      CHECK(intraMode >= NUM_LUMA_MODE, "luma mode out of range");
+      int predMode = PU::getWideAngle(tu, intraMode, compID);
       CHECK(predMode < -(NUM_EXT_LUMA_MODE >> 1) || predMode >= NUM_LUMA_MODE + (NUM_EXT_LUMA_MODE >> 1),
             "luma mode out of range");
       if (predMode == PLANAR_IDX)
