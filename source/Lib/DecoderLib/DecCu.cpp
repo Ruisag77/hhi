@@ -41,6 +41,7 @@
 #include "CommonLib/IntraPrediction.h"
 #include "CommonLib/Picture.h"
 #include "CommonLib/UnitTools.h"
+#include "CommonLib/EipLog.h"
 
 #include "CommonLib/dtrace_buffer.h"
 
@@ -383,6 +384,7 @@ void DecCu::xIntraRecBlk(TransformUnit &tu, const CompID compID)
         {
           const auto derivedIPrdModes = IntraPrediction::deriveIpmForTransform(piPred, cuNonConst);
           cuNonConst.inferredDimdMode = derivedIPrdModes.first;
+          EipLog::recordDecoderFinalEip(TU::getCbf(tu, compID));
         }
 #if RExt__DECODER_DEBUG_TOOL_STATISTICS
         CodingStatistics::IncrementStatisticTool(

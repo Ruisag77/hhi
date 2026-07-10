@@ -45,6 +45,7 @@
 #include "DecoderLib/AnnexBread.h"
 #include "DecoderLib/NALread.h"
 #include "CommonLib/CodingStatistics.h"
+#include "CommonLib/EipLog.h"
 #include "CommonLib/dtrace_codingstruct.h"
 
 //! \ingroup DecoderApp
@@ -74,6 +75,7 @@ DecApp::DecApp() : m_iPOCLastDisplay(-MAX_INT)
 
 DecApp::~DecApp()
 {
+  EipLog::finishDecoder();
 #if ENABLE_TRACING
   tracing_uninit(g_trace_ctx);
   g_trace_ctx = nullptr;
@@ -89,6 +91,10 @@ bool DecApp::parseCfg(int argc, char *argv[])
   DecAppCfg decCfgParser;
   bool      ret;
   ret = decCfgParser.parseCfg(argc, argv, &m_cDecLib.m_decCfg);
+  if (ret)
+  {
+    EipLog::initDecoder(m_cDecLib.m_decCfg.m_bitstreamFileName);
+  }
 
   m_iMaxTemporalLayer      = m_cDecLib.m_decCfg.m_iMaxTemporalLayer;
   m_targetOutputLayerIdSet = m_cDecLib.m_decCfg.m_targetOutputLayerIdSet;

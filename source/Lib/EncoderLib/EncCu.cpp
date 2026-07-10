@@ -42,6 +42,7 @@
 #include "AQp.h"
 
 #include "CommonLib/dtrace_codingstruct.h"
+#include "CommonLib/EipLog.h"
 #include "CommonLib/Picture.h"
 #include "CommonLib/UnitTools.h"
 #include "MCTS.h"
@@ -674,6 +675,10 @@ void EncCu::xCompressCU(CodingStructure *&tempCS, CodingStructure *&bestCS, Part
   if (slice.m_sps->m_useEIP && partitioner.chType == ChannelType::LUMA && CU::isIntra(cu) && bestCS->cus.size() == 1 &&
       bestCS->area.Y() == (*bestCS->cus.back()).Y())
   {
+    if (cu.eipFlag)
+    {
+      EipLog::recordEncoderSelectedEip();
+    }
     CU::saveModelsInHEIP(cu);
   }
 

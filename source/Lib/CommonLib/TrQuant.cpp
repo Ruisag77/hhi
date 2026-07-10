@@ -41,6 +41,7 @@
 #include "UnitTools.h"
 #include "ContextModelling.h"
 #include "CodingStructure.h"
+#include "EipLog.h"
 
 #include "dtrace_buffer.h"
 
@@ -1032,6 +1033,41 @@ void TrQuant::getTrTypes(const TransformUnit &tu, const CompID compID, TransType
     const uint8_t trSecond = trIndex - uint8_t { 6 } * trFirst;
     trTypeVer              = TransType(blockSym ? trFirst : trSecond);
     trTypeHor              = TransType(blockSym ? trSecond : trFirst);
+    if (tu.cu->eipFlag)
+    {
+      TransType legacyTrTypeHor = TransType::DCT2;
+      TransType legacyTrTypeVer = TransType::DCT2;
+      int legacyPredMode = PU::getWideAngle(tu, PU::getFinalIntraMode(*tu.cu, toChannelType(compID)), compID);
+      if (legacyPredMode == PLANAR_IDX)
+      {
+        if (tu.cu->plDir == PlanarDirType::VER)
+        {
+          legacyPredMode = VER_IDX;
+        }
+        else if (tu.cu->plDir == PlanarDirType::HOR)
+        {
+          legacyPredMode = HOR_IDX;
+        }
+      }
+      const int legacyModeImplicit = legacyPredMode < 0 ? legacyPredMode + NUM_LUMA_MODE
+        : legacyPredMode >= NUM_LUMA_MODE               ? legacyPredMode - NUM_LUMA_MODE + 2
+                                                        : legacyPredMode;
+      const int  legacyModeIdx        = legacyModeImplicit > DIA_IDX ? NUM_LUMA_MODE + 1 - legacyModeImplicit
+                                                                      : legacyModeImplicit;
+      const bool legacyTrTransposed   = legacyModeImplicit > DIA_IDX;
+      const uint8_t legacySizeIdxW    = std::min(3, floorLog2(width) - 2);
+      const uint8_t legacySizeIdxH    = std::min(3, floorLog2(height) - 2);
+      const uint8_t legacySizeIdx     = legacyTrTransposed ? legacySizeIdxH * 4 + legacySizeIdxW
+                                                           : legacySizeIdxW * 4 + legacySizeIdxH;
+      const uint8_t legacyTrIndex     = g_aucImplicitToTrSet[legacySizeIdx][legacyModeIdx];
+      legacyTrTypeHor = g_aucImplicitTrIdxToTr[legacyTrIndex][legacyTrTransposed ? 1 : 0];
+      legacyTrTypeVer = g_aucImplicitTrIdxToTr[legacyTrIndex][legacyTrTransposed ? 0 : 1];
+
+      EipLog::recordImplicitMts(tu.cs->pcv->isEncoder, tu.cu->slice->m_poc, tu.blocks[compID].x,
+                                tu.blocks[compID].y, width, height, tu.cu->intraDir[ChannelType::LUMA],
+                                tu.cu->inferredDimdMode, int(legacyTrTypeHor), int(legacyTrTypeVer), int(trTypeHor),
+                                int(trTypeVer));
+    }
     return;
   }
 

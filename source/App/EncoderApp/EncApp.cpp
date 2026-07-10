@@ -44,6 +44,7 @@
 
 #include "EncApp.h"
 #include "EncAppCfg.h"
+#include "CommonLib/EipLog.h"
 #include "EncoderLib/AnnexBwrite.h"
 #include "EncoderLib/EncLibCommon.h"
 
@@ -68,6 +69,7 @@ EncApp::EncApp(std::fstream &bitStream, EncLibCommon *encLibCommon) : m_cEncLib(
 
 EncApp::~EncApp()
 {
+  EipLog::finishEncoder();
 #if ENABLE_TRACING
   tracing_uninit(g_trace_ctx);
   g_trace_ctx = nullptr;
@@ -648,6 +650,11 @@ bool EncApp::parseCfg(int argc, char *argv[])
   EncAppCfg encCfgParser;
   bool      ret;
   ret = encCfgParser.parseCfg(argc, argv, &m_cEncLib.m_encCfg);
+  if (ret)
+  {
+    const EncCfg &encCfg = m_cEncLib.m_encCfg;
+    EipLog::initEncoder(encCfg.m_inputFileName, encCfg.m_bitstreamFileName, encCfg.m_iQP);
+  }
   return ret;
 }
 
