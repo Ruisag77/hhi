@@ -1531,7 +1531,11 @@ void IntraPrediction::predIntraTimd(PelBuf &piPred, CodingUnit &cu, const CompAr
     }
   }
 
-  if (useLocDepBlending)
+  if (!useLocDepBlending && pelNonLocDep != piPred.buf)
+  {
+    piPred.copyFrom(CPelBuf(pelNonLocDep, strideNonLocDep, width, height));
+  }
+  else if (useLocDepBlending)
   {
     int       mode      = ((weightHor > 0 && weightVer > 0) ? 0 : (weightVer > 0 ? 1 : 2));
     Pel      *pelDst    = piPred.buf;
@@ -4095,6 +4099,26 @@ int IntraPrediction::deriveTimdMode(const CPelBuf &recoBuf, const CompArea &area
       return cost;
     };
 
+    std::array<uint64_t, EXT_VDIA_IDX + 1> timdFusionModeCost;
+    std::array<int8_t, EXT_VDIA_IDX + 1>   timdFusionModeLocDep {};
+    timdFusionModeCost.fill(MAX_UINT64);
+
+    auto registerTimdFusionCandidate = [&](const int mode, const uint64_t cost, const uint64_t aboveCost,
+                                           const uint64_t leftCost)
+    {
+      if (mode < 0 || mode > EXT_VDIA_IDX || cost >= timdFusionModeCost[mode])
+      {
+        return;
+      }
+
+      timdFusionModeCost[mode] = cost;
+      timdFusionModeLocDep[mode] =
+        (eTemplateType != LEFT_ABOVE_NEIGHBOR) ? ((eTemplateType == LEFT_NEIGHBOR) ? 2 : 1)
+        : (aboveCost >> log2A < (leftCost >> (log2L + 1))) ? 1
+        : (leftCost >> log2L < (aboveCost >> (log2A + 1))) ? 2
+                                                                  : 0;
+    };
+
     if (timdDerivationMethod == TimdDerivationMethod::Full || timdDerivationMethod == TimdDerivationMethod::FullWithSAD)
     {
       for (int iMode = 0; iMode <= 1; iMode++)
@@ -4106,6 +4130,7 @@ int IntraPrediction::deriveTimdMode(const CPelBuf &recoBuf, const CompArea &area
 
         const auto [tmpCost0, tmpCost1] = calculateCost();
         const auto uiCost               = tmpCost0 + tmpCost1;
+        registerTimdFusionCandidate(iMode, uiCost, tmpCost0, tmpCost1);
 
         if (uiCost < uiBestCost)
         {
@@ -4195,6 +4220,7 @@ int IntraPrediction::deriveTimdMode(const CPelBuf &recoBuf, const CompArea &area
           updateFull)
       {
         uint64_t uiCost = tmpCost0 + tmpCost1;
+        registerTimdFusionCandidate(iMode, uiCost, tmpCost0, tmpCost1);
 
         if (fillTimdModeCostList && !isModeAddedToTimdModeCostList.at(mpmListMode))
         {
@@ -4282,6 +4308,7 @@ int IntraPrediction::deriveTimdMode(const CPelBuf &recoBuf, const CompArea &area
 
           const auto [tmpCost0, tmpCost1] = calculateCost();
           const auto uiCost               = tmpCost0 + tmpCost1;
+          registerTimdFusionCandidate(iMode, uiCost, tmpCost0, tmpCost1);
 
           if (uiCost < uiBestCost)
           {
@@ -4316,6 +4343,7 @@ int IntraPrediction::deriveTimdMode(const CPelBuf &recoBuf, const CompArea &area
 
           const auto [tmpCost0, tmpCost1] = calculateCost();
           const auto uiCost               = tmpCost0 + tmpCost1;
+          registerTimdFusionCandidate(iMode, uiCost, tmpCost0, tmpCost1);
 
           if (uiCost < uiSecondaryCost)
           {
@@ -4340,8 +4368,178 @@ int IntraPrediction::deriveTimdMode(const CPelBuf &recoBuf, const CompArea &area
         std::swap(iSecondaryMode, iBestMode);
       }
 
+      constexpr int numTimdJointCandidates = 6;
+      int           jointModes[numTimdJointCandidates] {};
+      uint64_t      jointModeCosts[numTimdJointCandidates];
+      int           numJointModes = 0;
+      std::fill_n(jointModeCosts, numTimdJointCandidates, MAX_UINT64);
+
+      for (int mode = 0; mode <= EXT_VDIA_IDX; mode++)
+      {
+        const uint64_t modeCost = timdFusionModeCost[mode];
+        if (modeCost == MAX_UINT64)
+        {
+          continue;
+        }
+
+        int insertPos = numJointModes;
+        while (insertPos > 0 && modeCost < jointModeCosts[insertPos - 1])
+        {
+          insertPos--;
+        }
+        if (insertPos >= numTimdJointCandidates)
+        {
+          continue;
+        }
+
+        const int lastPos = std::min(numJointModes, numTimdJointCandidates - 1);
+        for (int pos = lastPos; pos > insertPos; pos--)
+        {
+          jointModes[pos]     = jointModes[pos - 1];
+          jointModeCosts[pos] = jointModeCosts[pos - 1];
+        }
+        jointModes[insertPos]     = mode;
+        jointModeCosts[insertPos] = modeCost;
+        numJointModes             = std::min(numJointModes + 1, numTimdJointCandidates);
+      }
+
+      int  jointFusionWeight0       = -1;
+      bool jointFusionImprovesSingle = false;
+      if (numJointModes >= 2)
+      {
+        static Pel jointTemplatePred[numTimdJointCandidates]
+                                           [(MAX_CU_SIZE + TIMD_SAD_MAX_TEMP_SIZE) *
+                                            (MAX_CU_SIZE + TIMD_SAD_MAX_TEMP_SIZE)];
+
+        for (int candIdx = 0; candIdx < numJointModes; candIdx++)
+        {
+          initPredTimdIntraParams(pu, area, jointModes[candIdx], false);
+          predTimdIntraAng(COMP_Y, pu, jointModes[candIdx], jointTemplatePred[candIdx], uiPredStride, uiRealW,
+                           uiRealH, eTemplateType, (eTemplateType == ABOVE_NEIGHBOR) ? 0 : iTemplateWidth,
+                           (eTemplateType == LEFT_NEIGHBOR) ? 0 : iTemplateHeight);
+        }
+
+        const int jointTemplateWidth  = iTemplateWidth;
+        const int jointTemplateHeight = iTemplateHeight;
+        auto forEachJointTemplateSample = [&](const int candIdx0, const int candIdx1, auto sampleFunc)
+        {
+          auto processRegion = [&](const int startX, const int startY, const int width, const int height)
+          {
+            for (int y = startY; y < startY + height; y++)
+            {
+              const Pel *org  = piOrg + y * iOrgStride + startX;
+              const Pel *pred0 = jointTemplatePred[candIdx0] + y * uiPredStride + startX;
+              const Pel *pred1 = jointTemplatePred[candIdx1] + y * uiPredStride + startX;
+              for (int x = 0; x < width; x++)
+              {
+                sampleFunc(org[x], pred0[x], pred1[x]);
+              }
+            }
+          };
+
+          if (eTemplateType == LEFT_ABOVE_NEIGHBOR)
+          {
+            processRegion(jointTemplateWidth, 0, uiWidth, jointTemplateHeight);
+            processRegion(0, jointTemplateHeight, jointTemplateWidth, uiHeight);
+          }
+          else if (eTemplateType == ABOVE_NEIGHBOR)
+          {
+            processRegion(0, 0, uiWidth, jointTemplateHeight);
+          }
+          else
+          {
+            CHECK(eTemplateType != LEFT_NEIGHBOR, "Invalid TIMD template type");
+            processRegion(0, 0, jointTemplateWidth, uiHeight);
+          }
+        };
+
+        struct JointFusionResult
+        {
+          uint64_t sse;
+          uint64_t singleSse0;
+          uint64_t singleSse1;
+          int      weight0;
+        };
+
+        auto deriveJointFusion = [&](const int candIdx0, const int candIdx1)
+        {
+          int64_t  numerator = 0;
+          uint64_t denominator = 0;
+          uint64_t singleSse0 = 0;
+          uint64_t singleSse1 = 0;
+          forEachJointTemplateSample(candIdx0, candIdx1, [&](const Pel org, const Pel pred0, const Pel pred1)
+          {
+            const int64_t diffPred = int64_t(pred0) - pred1;
+            const int64_t target   = int64_t(org) - pred1;
+            const int64_t error0   = int64_t(org) - pred0;
+            const int64_t error1   = target;
+            numerator += target * diffPred;
+            denominator += uint64_t(diffPred * diffPred);
+            singleSse0 += uint64_t(error0 * error0);
+            singleSse1 += uint64_t(error1 * error1);
+          });
+
+          int weight0 = 32;
+          if (denominator != 0)
+          {
+            weight0 = numerator <= 0 ? 0
+              : uint64_t(numerator) >= denominator ? 64
+                                                   : int((uint64_t(numerator) * 64 + (denominator >> 1)) / denominator);
+          }
+
+          uint64_t fusionSse = 0;
+          forEachJointTemplateSample(candIdx0, candIdx1, [&](const Pel org, const Pel pred0, const Pel pred1)
+          {
+            const int prediction = (weight0 * pred0 + (64 - weight0) * pred1 + 32) >> 6;
+            const int64_t error  = int64_t(org) - prediction;
+            fusionSse += uint64_t(error * error);
+          });
+          return JointFusionResult { fusionSse, singleSse0, singleSse1, weight0 };
+        };
+
+        int currentIdx0 = -1;
+        int currentIdx1 = -1;
+        for (int candIdx = 0; candIdx < numJointModes; candIdx++)
+        {
+          currentIdx0 = jointModes[candIdx] == iBestMode ? candIdx : currentIdx0;
+          currentIdx1 = jointModes[candIdx] == iSecondaryMode ? candIdx : currentIdx1;
+        }
+
+        int bestPairIdx0 = currentIdx0 >= 0 ? currentIdx0 : 0;
+        int bestPairIdx1 = currentIdx1 >= 0 && currentIdx1 != bestPairIdx0 ? currentIdx1 : 1;
+        if (bestPairIdx0 == bestPairIdx1)
+        {
+          bestPairIdx1 = bestPairIdx0 == 0 ? 1 : 0;
+        }
+        JointFusionResult bestJointResult = deriveJointFusion(bestPairIdx0, bestPairIdx1);
+
+        for (int candIdx0 = 0; candIdx0 < numJointModes - 1; candIdx0++)
+        {
+          for (int candIdx1 = candIdx0 + 1; candIdx1 < numJointModes; candIdx1++)
+          {
+            const JointFusionResult result = deriveJointFusion(candIdx0, candIdx1);
+            if (result.sse < bestJointResult.sse && result.sse < std::min(result.singleSse0, result.singleSse1))
+            {
+              bestPairIdx0    = candIdx0;
+              bestPairIdx1    = candIdx1;
+              bestJointResult = result;
+            }
+          }
+        }
+
+        iBestMode                    = jointModes[bestPairIdx0];
+        uiBestCost                   = jointModeCosts[bestPairIdx0];
+        timdData.locDep[0]           = timdFusionModeLocDep[iBestMode];
+        iSecondaryMode               = jointModes[bestPairIdx1];
+        uiSecondaryCost              = jointModeCosts[bestPairIdx1];
+        timdData.locDep[1]           = timdFusionModeLocDep[iSecondaryMode];
+        jointFusionWeight0           = bestJointResult.weight0;
+        jointFusionImprovesSingle    = bestJointResult.sse < std::min(bestJointResult.singleSse0,
+                                                                       bestJointResult.singleSse1);
+      }
+
       // if( uiSecondaryCost < 2 * uiBestCost ), 2 * uiBestCost can overflow uint64_t
-      timdData.isBlend = (uiSecondaryCost - uiBestCost < uiBestCost);
+      timdData.isBlend = jointFusionImprovesSingle || (uiSecondaryCost - uiBestCost < uiBestCost);
 
       if (!timdData.isBlend && (iBestMode > DC_IDX))
       {
@@ -4422,6 +4620,12 @@ int IntraPrediction::deriveTimdMode(const CPelBuf &recoBuf, const CompArea &area
           timdData.relWeight[2] = 0;
         }
 
+        if (!useNonAngFusionCandidate && jointFusionWeight0 >= 0)
+        {
+          timdData.relWeight[0] = jointFusionWeight0;
+          timdData.relWeight[1] = sumWeight - jointFusionWeight0;
+        }
+
         // Refine the cost-derived weights by directly testing the fused prediction on the reconstructed template.
         // The original weights are retained unless a searched weight tuple gives a strictly lower template cost.
         constexpr int fusionWeightStep = 8;
@@ -4489,8 +4693,7 @@ int IntraPrediction::deriveTimdMode(const CPelBuf &recoBuf, const CompArea &area
                                                          timdData.relWeight[2] };
         uint64_t bestFusionCost = getFusedTemplateCost(bestWeights);
 
-        // Keep the primary candidate active: predIntraTimd uses its buffer as the destination of the final blend.
-        for (int weight0 = fusionWeightStep; weight0 <= sumWeight; weight0 += fusionWeightStep)
+        for (int weight0 = 0; weight0 <= sumWeight; weight0 += fusionWeightStep)
         {
           const int maxWeight1 = sumWeight - weight0;
           const int minWeight1 = useNonAngFusionCandidate ? 0 : maxWeight1;

@@ -360,8 +360,8 @@ public:
   void   setAndPredCcMergeCand(CodingUnit &cu, CrossCompModels &ccpCand, PelBuf &predCb, PelBuf &predCr);
   void   setAndPredCcMergeFusionCand(CodingUnit &cu, CrossCompModels model0, CrossCompModels model1, PelBuf &predCb,
                                      PelBuf &predCr);
-  int    xGetCostCCPFusion(const CodingUnit &cu, const CompID compID, const CompArea &chromaArea, int candIdx0,
-                           int candIdx1);
+  int    xGetCCPFusionTemplateCost(const CodingUnit &cu, int candIdx0, int candIdx1, int &fusionWeight,
+                                   int defaultWeight);
   void   findDecoderDerivedCcpModel(CodingUnit &cu, CrossCompModels &ccModel0, CrossCompModels &ccModel1);
   int    xDecDerivedFusionTemplateCost(const CodingUnit &cu, int candIdxOrig0, int candIdxOrig1, int cost0, int cost1);
   int    xTemplateCostCCLM(const CodingUnit &cu, const CompID compID, const CompArea &chromaArea,

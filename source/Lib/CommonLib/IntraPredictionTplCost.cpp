@@ -197,44 +197,91 @@ void IntraPrediction::findDecoderDerivedCcpModel(CodingUnit &cu, CrossCompModels
 int IntraPrediction::xDecDerivedFusionTemplateCost(const CodingUnit &cu, int candIdxOrig0, int candIdxOrig1, int cost0,
                                                    int cost1)
 {
-  const bool aboveAvailable = cu.cs->getCU(cu.blocks[COMP_Cb].pos().offset(0, -1), ChannelType::CHROMA) ? true : false;
-  const bool leftAvailable  = cu.cs->getCU(cu.blocks[COMP_Cb].pos().offset(-1, 0), ChannelType::CHROMA) ? true : false;
-
-  const int width  = cu.Cb().width;
-  const int height = cu.Cb().height;
-
   int candIdx0 = cost0 < cost1 ? candIdxOrig0 : candIdxOrig1;
   int candIdx1 = cost0 < cost1 ? candIdxOrig1 : candIdxOrig0;
+  int fusionWeight;
+  return xGetCCPFusionTemplateCost(cu, candIdx0, candIdx1, fusionWeight, 48);
+}
 
-  int cost = 0;
+int IntraPrediction::xGetCCPFusionTemplateCost(const CodingUnit &cu, int candIdx0, int candIdx1, int &fusionWeight,
+                                               int defaultWeight)
+{
+  const bool aboveAvailable = cu.cs->getCU(cu.blocks[COMP_Cb].pos().offset(0, -1), ChannelType::CHROMA) != nullptr;
+  const bool leftAvailable  = cu.cs->getCU(cu.blocks[COMP_Cb].pos().offset(-1, 0), ChannelType::CHROMA) != nullptr;
 
-  for (int channel = 0; channel < 2; channel++)
+  int64_t  numerator   = 0;
+  uint64_t denominator = 0;
+
+  auto accumulateModelStats = [&](const Pel org, const Pel pred0, const Pel pred1)
   {
-    CompID   compId   = channel ? COMP_Cr : COMP_Cb;
-    CompArea compArea = channel ? cu.Cr() : cu.Cb();
+    const int64_t predDiff = int64_t(pred0) - pred1;
+    numerator += (int64_t(org) - pred1) * predDiff;
+    denominator += uint64_t(predDiff * predDiff);
+  };
 
-    Pel *predTop0  = xGetCcTemplPredBuf(compId, candIdx0, true, compArea).buf;
-    Pel *predTop1  = xGetCcTemplPredBuf(compId, candIdx1, true, compArea).buf;
-    Pel *predLeft0 = xGetCcTemplPredBuf(compId, candIdx0, false, compArea).buf;
-    Pel *predLeft1 = xGetCcTemplPredBuf(compId, candIdx1, false, compArea).buf;
-
-    PelBuf reco = cu.cs->picture->getRecoBuf(compArea);
+  for (const CompID compId: { COMP_Cb, COMP_Cr })
+  {
+    const CompArea compArea = cu.blocks[compId];
+    const int      width    = compArea.width;
+    const int      height   = compArea.height;
+    const PelBuf   reco     = cu.cs->picture->getRecoBuf(compArea);
 
     if (aboveAvailable)
     {
+      const PelBuf pred0 = xGetCcTemplPredBuf(compId, candIdx0, true, compArea);
+      const PelBuf pred1 = xGetCcTemplPredBuf(compId, candIdx1, true, compArea);
       for (int x = 0; x < width; x++)
       {
-        Pel p = (3 * predTop0[x] + predTop1[x] + 2) >> 2;
-        cost += abs(reco.at(x, -1) - p);
+        accumulateModelStats(reco.at(x, -1), pred0.at(x, 0), pred1.at(x, 0));
       }
     }
 
     if (leftAvailable)
     {
+      const PelBuf pred0 = xGetCcTemplPredBuf(compId, candIdx0, false, compArea);
+      const PelBuf pred1 = xGetCcTemplPredBuf(compId, candIdx1, false, compArea);
       for (int y = 0; y < height; y++)
       {
-        Pel p = (3 * predLeft0[y] + predLeft1[y] + 2) >> 2;
-        cost += abs(reco.at(-1, y) - p);
+        accumulateModelStats(reco.at(-1, y), pred0.at(0, y), pred1.at(0, y));
+      }
+    }
+  }
+
+  fusionWeight = defaultWeight;
+  if (denominator != 0)
+  {
+    fusionWeight = numerator <= 0 ? 0
+      : uint64_t(numerator) >= denominator ? 64
+                                           : int((uint64_t(numerator) * 64 + (denominator >> 1)) / denominator);
+  }
+
+  int cost = 0;
+  for (const CompID compId: { COMP_Cb, COMP_Cr })
+  {
+    const CompArea compArea = cu.blocks[compId];
+    const int      width    = compArea.width;
+    const int      height   = compArea.height;
+    const PelBuf   reco     = cu.cs->picture->getRecoBuf(compArea);
+
+    if (aboveAvailable)
+    {
+      const PelBuf pred0 = xGetCcTemplPredBuf(compId, candIdx0, true, compArea);
+      const PelBuf pred1 = xGetCcTemplPredBuf(compId, candIdx1, true, compArea);
+      for (int x = 0; x < width; x++)
+      {
+        const Pel pred = Pel((fusionWeight * pred0.at(x, 0) + (64 - fusionWeight) * pred1.at(x, 0) + 32) >> 6);
+        cost += abs(reco.at(x, -1) - pred);
+      }
+    }
+
+    if (leftAvailable)
+    {
+      const PelBuf pred0 = xGetCcTemplPredBuf(compId, candIdx0, false, compArea);
+      const PelBuf pred1 = xGetCcTemplPredBuf(compId, candIdx1, false, compArea);
+      for (int y = 0; y < height; y++)
+      {
+        const Pel pred = Pel((fusionWeight * pred0.at(0, y) + (64 - fusionWeight) * pred1.at(0, y) + 32) >> 6);
+        cost += abs(reco.at(-1, y) - pred);
       }
     }
   }
@@ -279,29 +326,20 @@ void IntraPrediction::setAndPredCcMergeFusionCand(CodingUnit &cu, CrossCompModel
     return;
   }
 
+  xGetOneCCPCandCost(cu, model0, 0, model0.filter);
+  xGetOneCCPCandCost(cu, model1, 1, model1.filter);
+  int fusionWeight;
+  xGetCCPFusionTemplateCost(cu, 0, 1, fusionWeight, cu.decDerivedCcpMode ? 48 : 32);
+
   setAndPredCcMergeCand(cu, model1, predCb1, predCr1);
   setAndPredCcMergeCand(cu, model0, predCb, predCr);
-
-  if (cu.decDerivedCcpMode)
-  {
-    for (int y = 0; y < height; y++)
-    {
-      for (int x = 0; x < width; x++)
-      {
-        predCb.at(x, y) = (3 * predCb.at(x, y) + predCb1.at(x, y) + 2) >> 2;
-        predCr.at(x, y) = (3 * predCr.at(x, y) + predCr1.at(x, y) + 2) >> 2;
-      }
-    }
-
-    return;
-  }
 
   for (int y = 0; y < height; y++)
   {
     for (int x = 0; x < width; x++)
     {
-      predCb.at(x, y) = (predCb.at(x, y) + predCb1.at(x, y) + 1) >> 1;
-      predCr.at(x, y) = (predCr.at(x, y) + predCr1.at(x, y) + 1) >> 1;
+      predCb.at(x, y) = Pel((fusionWeight * predCb.at(x, y) + (64 - fusionWeight) * predCb1.at(x, y) + 32) >> 6);
+      predCr.at(x, y) = Pel((fusionWeight * predCr.at(x, y) + (64 - fusionWeight) * predCr1.at(x, y) + 32) >> 6);
     }
   }
 }
@@ -352,9 +390,8 @@ void IntraPrediction::reorderCCPCandidates(CodingUnit &cu, CrossCompModels candL
     {
       for (int j = i + 1; j < maxCandIdxForCcpFusion; j++)
       {
-        int sad = 0;
-        sad += xGetCostCCPFusion(cu, COMP_Cb, cu.Cb(), ccpCandIndex[i], ccpCandIndex[j]);
-        sad += xGetCostCCPFusion(cu, COMP_Cr, cu.Cr(), ccpCandIndex[i], ccpCandIndex[j]);
+        int fusionWeight;
+        int sad = xGetCCPFusionTemplateCost(cu, ccpCandIndex[i], ccpCandIndex[j], fusionWeight, 32);
         for (int m = 0; m < MAX_CCP_FUSION_NUM; m++)
         {
           if (sad < fusionCandCost[m])
@@ -376,45 +413,6 @@ void IntraPrediction::reorderCCPCandidates(CodingUnit &cu, CrossCompModels candL
       }
     }
   }
-}
-
-int IntraPrediction::xGetCostCCPFusion(const CodingUnit &cu, const CompID compID, const CompArea &chromaArea,
-                                       int candIdx0, int candIdx1)
-{
-  const int width  = chromaArea.width;
-  const int height = chromaArea.height;
-
-  const bool aboveAvailable = cu.cs->getCU(cu.blocks[compID].pos().offset(0, -1), ChannelType::CHROMA) ? true : false;
-  const bool leftAvailable  = cu.cs->getCU(cu.blocks[compID].pos().offset(-1, 0), ChannelType::CHROMA) ? true : false;
-
-  int    cost = 0;
-  PelBuf reco = cu.cs->picture->getRecoBuf(chromaArea);
-
-  if (aboveAvailable)
-  {
-    PelBuf pred0 = xGetCcTemplPredBuf(compID, candIdx0, true, chromaArea);
-    PelBuf pred1 = xGetCcTemplPredBuf(compID, candIdx1, true, chromaArea);
-
-    for (int x = 0; x < width; x++)
-    {
-      Pel pred = (pred0.at(x, 0) + pred1.at(x, 0) + 1) >> 1;
-      cost += abs(reco.at(x, -1) - pred);
-    }
-  }
-
-  if (leftAvailable)
-  {
-    PelBuf pred0 = xGetCcTemplPredBuf(compID, candIdx0, false, chromaArea);
-    PelBuf pred1 = xGetCcTemplPredBuf(compID, candIdx1, false, chromaArea);
-
-    for (int y = 0; y < height; y++)
-    {
-      Pel pred = (pred0.at(0, y) + pred1.at(0, y) + 1) >> 1;
-      cost += abs(reco.at(-1, y) - pred);
-    }
-  }
-
-  return cost;
 }
 
 void IntraPrediction::xDecDerivedCcpFusionTemplFilter(Pel *predBuf, int numSamples)
