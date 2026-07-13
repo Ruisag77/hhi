@@ -63,7 +63,7 @@ LogState &state()
   return logState;
 }
 
-std::string normalizePath(const std::string &path)
+fs::path absolutePath(const std::string &path)
 {
   if (path.empty())
   {
@@ -71,8 +71,13 @@ std::string normalizePath(const std::string &path)
   }
 
   std::error_code ec;
-  fs::path        absolutePath = fs::absolute(fs::path(path), ec);
-  return (ec ? fs::path(path) : absolutePath).lexically_normal().string();
+  fs::path        result = fs::absolute(fs::path(path), ec);
+  return (ec ? fs::path(path) : result).lexically_normal();
+}
+
+std::string normalizePath(const std::string &path)
+{
+  return absolutePath(path).string();
 }
 
 std::string sanitizeName(std::string name)
@@ -141,14 +146,73 @@ std::string sequenceFromBitstream(const std::string &bitstreamFile)
     }
     stem.resize(end);
   }
+
+  lower = stem;
+  for (char &c: lower)
+  {
+    c = char(std::tolower(static_cast<unsigned char>(c)));
+  }
+  const size_t rasPos = lower.rfind("_ras_");
+  if (rasPos != std::string::npos && rasPos + 5 < lower.size())
+  {
+    bool numericSuffix = true;
+    for (size_t pos = rasPos + 5; pos < lower.size(); pos++)
+    {
+      numericSuffix = numericSuffix && std::isdigit(static_cast<unsigned char>(lower[pos]));
+    }
+    if (numericSuffix)
+    {
+      stem.resize(rasPos);
+    }
+  }
   return sanitizeName(stem);
 }
 
-fs::path logRoot()
+std::string sequenceFromParallelScript(const std::string &bitstreamFile)
 {
-  std::error_code ec;
-  fs::path        root = fs::current_path(ec) / "EIP_LOG";
-  return ec ? fs::path("EIP_LOG") : root;
+  const std::string directory = fs::path(bitstreamFile).parent_path().filename().string();
+  std::string       lower     = directory;
+  for (char &c: lower)
+  {
+    c = char(std::tolower(static_cast<unsigned char>(c)));
+  }
+
+  const size_t marker = lower.rfind("_ras_result_qp");
+  return marker == std::string::npos ? std::string() : sanitizeName(directory.substr(0, marker));
+}
+
+fs::path logRoot(const std::string &bitstreamFile)
+{
+  const fs::path bitstreamPath = absolutePath(bitstreamFile);
+  fs::path       directory     = bitstreamPath.parent_path();
+
+  // Parallel_Coding.py places bitstreams below output; keep EIP_LOG beside that output tree.
+  for (fs::path current = directory; !current.empty(); current = current.parent_path())
+  {
+    std::string name = current.filename().string();
+    for (char &c: name)
+    {
+      c = char(std::tolower(static_cast<unsigned char>(c)));
+    }
+    if (name == "output")
+    {
+      return current.parent_path() / "EIP_LOG";
+    }
+    if (current == current.parent_path())
+    {
+      break;
+    }
+  }
+
+  return directory / "EIP_LOG";
+}
+
+fs::path makeLogFile(const fs::path &root, const std::string &sequence, int qp,
+                     const std::string &bitstreamFile)
+{
+  const std::string qpDirectory = qp >= 0 ? "QP" + std::to_string(qp) : "QPunknown";
+  const std::string logName     = sanitizeName(fs::path(bitstreamFile).stem().string()) + ".log";
+  return root / sequence / qpDirectory / logName;
 }
 
 bool ensureParentDirectory(const fs::path &file)
@@ -163,9 +227,8 @@ bool ensureParentDirectory(const fs::path &file)
   return !ec;
 }
 
-fs::path findEncoderLog(const std::string &bitstreamFile)
+fs::path findEncoderLog(const fs::path &root, const std::string &bitstreamFile)
 {
-  const fs::path root = logRoot();
   std::error_code ec;
   if (!fs::exists(root, ec))
   {
@@ -284,8 +347,12 @@ void initEncoder(const std::string &inputFile, const std::string &bitstreamFile,
     return;
   }
 
-  const std::string sequence = sequenceFromInput(inputFile);
-  const fs::path    logFile  = logRoot() / sequence / ("QP" + std::to_string(qp) + ".log");
+  std::string sequence = sequenceFromParallelScript(bitstreamFile);
+  if (sequence.empty())
+  {
+    sequence = sequenceFromInput(inputFile);
+  }
+  const fs::path logFile = makeLogFile(logRoot(bitstreamFile), sequence, qp, bitstreamFile);
   resetState(logState, Role::ENCODER, logFile);
   if (!ensureParentDirectory(logFile))
   {
@@ -308,12 +375,23 @@ void initDecoder(const std::string &bitstreamFile)
     return;
   }
 
-  fs::path logFile = findEncoderLog(bitstreamFile);
+  const fs::path root     = logRoot(bitstreamFile);
+  const int      qp       = qpFromName(bitstreamFile);
+  std::string    sequence = sequenceFromParallelScript(bitstreamFile);
+  if (sequence.empty())
+  {
+    sequence = sequenceFromBitstream(bitstreamFile);
+  }
+
+  fs::path logFile = makeLogFile(root, sequence, qp, bitstreamFile);
+  std::error_code ec;
+  if (!fs::exists(logFile, ec))
+  {
+    logFile = findEncoderLog(root, bitstreamFile);
+  }
   if (logFile.empty())
   {
-    const int         qp       = qpFromName(bitstreamFile);
-    const std::string sequence = sequenceFromBitstream(bitstreamFile);
-    logFile = logRoot() / sequence / (qp >= 0 ? "QP" + std::to_string(qp) + ".log" : "QPunknown.log");
+    logFile = makeLogFile(root, sequence, qp, bitstreamFile);
     if (ensureParentDirectory(logFile) && !fs::exists(logFile))
     {
       std::ofstream output(logFile, std::ios::out | std::ios::trunc);
