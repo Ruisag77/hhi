@@ -4357,10 +4357,12 @@ int IntraPrediction::deriveTimdMode(const CPelBuf &recoBuf, const CompArea &area
 
         const int blendSumWeight = 6;
         int       sumWeight      = 1 << blendSumWeight;
+        bool      useNonAngFusionCandidate = false;
 
         if (((iBestMode != iNonAngMode) && (iSecondaryMode != iNonAngMode)) &&
             ((uiNonAngCost < uiBestCost) || (uiNonAngCost - uiBestCost < (uiBestCost >> 1))))
         {
+          useNonAngFusionCandidate = true;
           int iRatio[2];
 
           // compute 2*sum while checking for overflows
@@ -4418,6 +4420,96 @@ int IntraPrediction::deriveTimdMode(const CPelBuf &recoBuf, const CompArea &area
           timdData.relWeight[0] = iRatio;
           timdData.relWeight[1] = sumWeight - iRatio;
           timdData.relWeight[2] = 0;
+        }
+
+        // Refine the cost-derived weights by directly testing the fused prediction on the reconstructed template.
+        // The original weights are retained unless a searched weight tuple gives a strictly lower template cost.
+        constexpr int fusionWeightStep = 8;
+        static Pel    fusionTemplatePred[TIMD_FUSION_NUM]
+                                           [(MAX_CU_SIZE + TIMD_SAD_MAX_TEMP_SIZE) *
+                                            (MAX_CU_SIZE + TIMD_SAD_MAX_TEMP_SIZE)];
+
+        const int fusionTemplateWidth  = iTemplateWidth;
+        const int fusionTemplateHeight = iTemplateHeight;
+        const int numFusionCandidates  = useNonAngFusionCandidate ? TIMD_FUSION_NUM : 2;
+        for (int candIdx = 0; candIdx < numFusionCandidates; candIdx++)
+        {
+          const int mode = timdData.blendMode[candIdx];
+          initPredTimdIntraParams(pu, area, mode, false);
+          predTimdIntraAng(COMP_Y, pu, mode, fusionTemplatePred[candIdx], uiPredStride, uiRealW, uiRealH,
+                           eTemplateType, (eTemplateType == ABOVE_NEIGHBOR) ? 0 : iTemplateWidth,
+                           (eTemplateType == LEFT_NEIGHBOR) ? 0 : iTemplateHeight);
+        }
+
+        auto getFusedTemplateCost = [&](const std::array<int, TIMD_FUSION_NUM> &weights)
+        {
+          auto blendTemplateRegion = [&](const int startX, const int startY, const int width, const int height)
+          {
+            for (int y = startY; y < startY + height; y++)
+            {
+              Pel       *dst = piPred + y * uiPredStride + startX;
+              const Pel *src[TIMD_FUSION_NUM];
+              for (int candIdx = 0; candIdx < numFusionCandidates; candIdx++)
+              {
+                src[candIdx] = fusionTemplatePred[candIdx] + y * uiPredStride + startX;
+              }
+
+              for (int x = 0; x < width; x++)
+              {
+                int value = 0;
+                for (int candIdx = 0; candIdx < numFusionCandidates; candIdx++)
+                {
+                  value += weights[candIdx] * src[candIdx][x];
+                }
+                dst[x] = Pel((value + (sumWeight >> 1)) >> blendSumWeight);
+              }
+            }
+          };
+
+          if (eTemplateType == LEFT_ABOVE_NEIGHBOR)
+          {
+            blendTemplateRegion(fusionTemplateWidth, 0, uiWidth, fusionTemplateHeight);
+            blendTemplateRegion(0, fusionTemplateHeight, fusionTemplateWidth, uiHeight);
+          }
+          else if (eTemplateType == ABOVE_NEIGHBOR)
+          {
+            blendTemplateRegion(0, 0, uiWidth, fusionTemplateHeight);
+          }
+          else
+          {
+            CHECK(eTemplateType != LEFT_NEIGHBOR, "Invalid TIMD template type");
+            blendTemplateRegion(0, 0, fusionTemplateWidth, uiHeight);
+          }
+
+          const auto [aboveCost, leftCost] = calculateCost();
+          return aboveCost + leftCost;
+        };
+
+        std::array<int, TIMD_FUSION_NUM> bestWeights = { timdData.relWeight[0], timdData.relWeight[1],
+                                                         timdData.relWeight[2] };
+        uint64_t bestFusionCost = getFusedTemplateCost(bestWeights);
+
+        // Keep the primary candidate active: predIntraTimd uses its buffer as the destination of the final blend.
+        for (int weight0 = fusionWeightStep; weight0 <= sumWeight; weight0 += fusionWeightStep)
+        {
+          const int maxWeight1 = sumWeight - weight0;
+          const int minWeight1 = useNonAngFusionCandidate ? 0 : maxWeight1;
+          for (int weight1 = minWeight1; weight1 <= maxWeight1; weight1 += fusionWeightStep)
+          {
+            std::array<int, TIMD_FUSION_NUM> weights = { weight0, weight1,
+                                                         sumWeight - weight0 - weight1 };
+            const uint64_t fusionCost = getFusedTemplateCost(weights);
+            if (fusionCost < bestFusionCost)
+            {
+              bestFusionCost = fusionCost;
+              bestWeights    = weights;
+            }
+          }
+        }
+
+        for (int candIdx = 0; candIdx < TIMD_FUSION_NUM; candIdx++)
+        {
+          timdData.relWeight[candIdx] = int8_t(bestWeights[candIdx]);
         }
       }
     }
