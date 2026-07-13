@@ -4533,9 +4533,11 @@ int IntraPrediction::deriveTimdMode(const CPelBuf &recoBuf, const CompArea &area
         iSecondaryMode               = jointModes[bestPairIdx1];
         uiSecondaryCost              = jointModeCosts[bestPairIdx1];
         timdData.locDep[1]           = timdFusionModeLocDep[iSecondaryMode];
-        jointFusionWeight0           = bestJointResult.weight0;
         jointFusionImprovesSingle    = bestJointResult.sse < std::min(bestJointResult.singleSse0,
                                                                        bestJointResult.singleSse1);
+        jointFusionWeight0           = jointFusionImprovesSingle && bestJointResult.weight0 > 0
+          ? bestJointResult.weight0
+          : -1;
       }
 
       // if( uiSecondaryCost < 2 * uiBestCost ), 2 * uiBestCost can overflow uint64_t
@@ -4693,7 +4695,7 @@ int IntraPrediction::deriveTimdMode(const CPelBuf &recoBuf, const CompArea &area
                                                          timdData.relWeight[2] };
         uint64_t bestFusionCost = getFusedTemplateCost(bestWeights);
 
-        for (int weight0 = 0; weight0 <= sumWeight; weight0 += fusionWeightStep)
+        for (int weight0 = fusionWeightStep; weight0 <= sumWeight; weight0 += fusionWeightStep)
         {
           const int maxWeight1 = sumWeight - weight0;
           const int minWeight1 = useNonAngFusionCandidate ? 0 : maxWeight1;

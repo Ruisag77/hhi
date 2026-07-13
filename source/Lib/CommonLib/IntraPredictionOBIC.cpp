@@ -85,19 +85,33 @@ void IntraPrediction::deriveObicMode(const CPelBuf &recoBuf, const CompArea &are
       w[0]                = neighbourTimd.relWeight[0];
       w[1] = (neighbourTimd.isBlend && (neighbourTimd.relWeight[1] > 0)) ? neighbourTimd.relWeight[1] : 0;
       w[2] = (neighbourTimd.isBlend && (neighbourTimd.relWeight[2] > 0)) ? neighbourTimd.relWeight[2] : 0;
-      histoLocDep[m][neighbourTimd.locDep[0]] += numSamples;
+
+      const int referenceWeight = w[0] > 0 ? w[0] : (w[1] > 0 ? w[1] : w[2]);
+      if (referenceWeight == 0)
+      {
+        continue;
+      }
+
+      auto addTimdMode = [&](const int mode, const int locDep, const int modeWeight)
+      {
+        if (modeWeight > 0)
+        {
+          histoLocDep[mode][locDep] += int(int64_t(numSamples) * modeWeight / referenceWeight);
+        }
+      };
+
+      addTimdMode(m, neighbourTimd.locDep[0], w[0]);
 
       if (neighbourTimd.isBlend && neighbourTimd.relWeight[1] > 0 &&
           (neighbourTimd.blendMode[0] != neighbourTimd.blendMode[1]))
       {
         int m = MAP131TO67(neighbourTimd.blendMode[1]);
-        CHECK(!w[0], "Division by zero!");
-        histoLocDep[m][neighbourTimd.locDep[1]] += numSamples * w[1] / w[0];
-        if (neighbourTimd.relWeight[2] > 0)
-        {
-          int m = MAP131TO67(neighbourTimd.blendMode[2]);
-          histoLocDep[m][neighbourTimd.locDep[2]] += numSamples * w[2] / w[0];
-        }
+        addTimdMode(m, neighbourTimd.locDep[1], w[1]);
+      }
+      if (neighbourTimd.isBlend && neighbourTimd.relWeight[2] > 0)
+      {
+        int m = MAP131TO67(neighbourTimd.blendMode[2]);
+        addTimdMode(m, neighbourTimd.locDep[2], w[2]);
       }
     }
     else if (cuNeighbours[i]->dimdFlag && !cuNeighbours[i]->obicFlag)
