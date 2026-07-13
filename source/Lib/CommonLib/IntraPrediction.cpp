@@ -1893,9 +1893,84 @@ void IntraPrediction::locDepBlending(Pel *pDst, ptrdiff_t strideDst, Pel *pVer, 
   }
 }
 
+static int getDimdAngularMode(int mode, int offset)
+{
+  constexpr int numAngularModes = NUM_LUMA_MODE - ANGULAR_BASE;
+  int           angularIdx      = mode - ANGULAR_BASE + offset;
+
+  if (angularIdx < 0)
+  {
+    angularIdx += numAngularModes;
+  }
+  else if (angularIdx >= numAngularModes)
+  {
+    angularIdx -= numAngularModes;
+  }
+  return ANGULAR_BASE + angularIdx;
+}
+
+static int getDimdAngularDistance(int mode0, int mode1)
+{
+  constexpr int numAngularModes = NUM_LUMA_MODE - ANGULAR_BASE;
+  const int     distance        = std::abs(mode0 - mode1);
+  return std::min(distance, numAngularModes - distance);
+}
+
+static int getDimdSmoothedAmplitude(const int *histogram, int mode)
+{
+  return histogram[getDimdAngularMode(mode, -1)] + 2 * histogram[mode] +
+         histogram[getDimdAngularMode(mode, 1)];
+}
+
+static int deriveDimdPlanarWeight(const int *amplitude, const int *mode)
+{
+  constexpr int confidenceBits      = 8;
+  constexpr int confidenceScale     = 1 << confidenceBits;
+  constexpr int maxSpreadDistance   = NUM_DIR;
+  constexpr int minPlanarWeight     = 8;
+  constexpr int maxPlanarWeight     = 24;
+  constexpr int numDirectionalPeaks = DIMD_FUSION_NUM - 1;
+
+  int64_t totalAmplitude   = 0;
+  int64_t weightedDistance = 0;
+  for (int i = 0; i < numDirectionalPeaks && amplitude[i] > 0; i++)
+  {
+    totalAmplitude += amplitude[i];
+    if (i > 0)
+    {
+      const int distance = std::min(getDimdAngularDistance(mode[0], mode[i]), maxSpreadDistance);
+      weightedDistance += int64_t(amplitude[i]) * distance;
+    }
+  }
+
+  if (totalAmplitude == 0)
+  {
+    return maxPlanarWeight;
+  }
+
+  const int64_t halfTotal = totalAmplitude >> 1;
+  // Q8 confidence combines peak dominance, top-two contrast and angular coherence. A concentrated histogram keeps
+  // more directional weight, while similarly strong and distant peaks shrink the fusion towards Planar.
+  const int dominance = int((int64_t(amplitude[0]) * confidenceScale + halfTotal) / totalAmplitude);
+  const int contrast =
+    int((int64_t(amplitude[0] - amplitude[1]) * confidenceScale + halfTotal) / totalAmplitude);
+  const int spread =
+    int((weightedDistance * confidenceScale + totalAmplitude * maxSpreadDistance / 2) /
+        (totalAmplitude * maxSpreadDistance));
+  const int coherence  = confidenceScale - std::min(spread, confidenceScale);
+  const int confidence = (dominance + contrast + coherence + 1) / 3;
+
+  const int planarRange  = maxPlanarWeight - minPlanarWeight;
+  const int planarWeight =
+    maxPlanarWeight - ((planarRange * confidence + (confidenceScale >> 1)) >> confidenceBits);
+  return Clip3(minPlanarWeight, maxPlanarWeight, planarWeight);
+}
+
 void IntraPrediction::deriveDimdMode(DimdData &dimdData, const CPelBuf &recoBuf, const CompArea &area,
                                      const CodingUnit &cu)
 {
+  dimdData = {};
+
   const CodingStructure &cs  = *cu.cs;
   const SPS             &sps = *cs.sps;
   const PreCalcValues   &pcv = *cs.pcv;
@@ -1983,27 +2058,45 @@ void IntraPrediction::deriveDimdMode(DimdData &dimdData, const CPelBuf &recoBuf,
     aiHistogram[i] = histogramTop[i] + histogramLeft[i] + histogramTopLeft[i];
   }
 
-  // ----- Step 3: derive best modes from histogram of gradients -----
+  // ----- Step 3: smooth the histogram and derive separated directional peaks -----
   int amp[DIMD_FUSION_NUM - 1]  = { 0 };
   int mode[DIMD_FUSION_NUM - 1] = { 0 };
-  for (int i = 0; i < NUM_LUMA_MODE; i++)
+  constexpr int peakMergeRadius = 2;
+  for (int peakIdx = 0; peakIdx < DIMD_FUSION_NUM - 1; peakIdx++)
   {
-    int curAmp  = aiHistogram[i];
-    int curMode = i;
-    for (int j = 0; j < DIMD_FUSION_NUM - 1; j++)
+    int bestAmplitude = 0;
+    int bestMode      = 0;
+    for (int curMode = ANGULAR_BASE; curMode < NUM_LUMA_MODE; curMode++)
     {
-      if (curAmp > amp[j])
+      bool mergedWithStrongerPeak = false;
+      for (int i = 0; i < peakIdx; i++)
       {
-        for (int k = DIMD_FUSION_NUM - 2; k > j; k--)
+        if (getDimdAngularDistance(curMode, mode[i]) <= peakMergeRadius)
         {
-          amp[k]  = amp[k - 1];
-          mode[k] = mode[k - 1];
+          mergedWithStrongerPeak = true;
+          break;
         }
-        amp[j]  = curAmp;
-        mode[j] = curMode;
-        break;
+      }
+      if (mergedWithStrongerPeak)
+      {
+        continue;
+      }
+
+      // The 1:2:1 response stabilizes bin quantization; NMS assigns the surrounding radius to the stronger peak.
+      const int curAmplitude = getDimdSmoothedAmplitude(aiHistogram, curMode);
+      if (curAmplitude > bestAmplitude)
+      {
+        bestAmplitude = curAmplitude;
+        bestMode      = curMode;
       }
     }
+
+    if (bestAmplitude == 0)
+    {
+      break;
+    }
+    amp[peakIdx]  = bestAmplitude;
+    mode[peakIdx] = bestMode;
   }
 
   // check location dependendency
@@ -2013,9 +2106,9 @@ void IntraPrediction::deriveDimdMode(DimdData &dimdData, const CPelBuf &recoBuf,
     int curMode        = mode[i - 1];
     if (curMode > DC_IDX)
     {
-      uint32_t amp      = aiHistogram[curMode];
-      uint32_t ampLeft  = histogramLeft[curMode];
-      uint32_t ampAbove = histogramTop[curMode];
+      uint32_t amp      = uint32_t(getDimdSmoothedAmplitude(aiHistogram, curMode));
+      uint32_t ampLeft  = uint32_t(getDimdSmoothedAmplitude(histogramLeft, curMode));
+      uint32_t ampAbove = uint32_t(getDimdSmoothedAmplitude(histogramTop, curMode));
       // explicit amp/3 by Montgomery modular multiplication, as done by optimizing compilers
       uint32_t ampD3    = (uint64_t(amp) * 0x55555556) >> 32;
       if (ampLeft < ampD3)
@@ -2064,25 +2157,25 @@ void IntraPrediction::deriveDimdMode(DimdData &dimdData, const CPelBuf &recoBuf,
 
   if (dimdData.isBlend)
   {
+    const int planarWeight = deriveDimdPlanarWeight(amp, mode);
     if (mode[1] == 0)   // special case: only one mode, but location dependent
     {
       CHECKD(dimdData.locDep[1] == 0, "Wrong logic");
-      dimdData.relWeight[0] = 21;   // planar weight
-      dimdData.relWeight[1] = sumWeight - 21;
+      dimdData.relWeight[0] = planarWeight;
+      dimdData.relWeight[1] = sumWeight - planarWeight;
     }
     else
     {
-      int planarWeight = 16;   // ~ 1/4 of the weight reserved for planar
       sumWeight -= planarWeight;
 
       // compute iRatio[j] = sum_weight * amp[j] / s1 with s1= amp[0] + ... + amp[DIMD_FUSION_NUM-1]
-      int s1 = 0;
+      int64_t s1 = 0;
       for (int i = 0; i < DIMD_FUSION_NUM - 1; i++)
       {
         s1 += amp[i];
       }
-      int x      = floorLog2(s1);
-      int normS1 = (s1 << 4 >> x) & 15;
+      int x      = floorLog2Uint64(uint64_t(s1));
+      int normS1 = int((s1 << 4 >> x) & 15);
       int v      = g_gradDivTable[normS1];
 
       x += (normS1 != 0);
@@ -2092,7 +2185,7 @@ void IntraPrediction::deriveDimdMode(DimdData &dimdData, const CPelBuf &recoBuf,
 
       for (int i = 0; i < DIMD_FUSION_NUM - 1; i++)
       {
-        iRatio[i] = (amp[i] * v * sumWeight + add) >> shift;
+        iRatio[i] = int((int64_t(amp[i]) * v * sumWeight + add) >> shift);
         if (amp[i] == 0)
         {
           iRatio[i] = 0;
