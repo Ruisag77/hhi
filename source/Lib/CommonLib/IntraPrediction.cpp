@@ -4559,36 +4559,62 @@ int IntraPrediction::deriveTimdMode(const CPelBuf &recoBuf, const CompArea &area
         int       sumWeight      = 1 << blendSumWeight;
         bool      useNonAngFusionCandidate = false;
 
+        // Compute round(numerator * 2^precisionBits / denominator) without
+        // multiplying large TIMD costs or relying on a reciprocal/log2 path.
+        const auto deriveRoundedWeight = [](uint64_t numerator, uint64_t denominator, int precisionBits)
+        {
+          if (denominator == 0)
+          {
+            return 0;
+          }
+
+          numerator = std::min(numerator, denominator);
+          uint64_t remainder = numerator % denominator;
+          int      weight    = int(numerator / denominator) << precisionBits;
+          int      fraction  = 0;
+
+          for (int bit = 0; bit < precisionBits; bit++)
+          {
+            fraction <<= 1;
+            if (remainder >= denominator - remainder)
+            {
+              remainder -= denominator - remainder;
+              fraction++;
+            }
+            else
+            {
+              remainder <<= 1;
+            }
+          }
+
+          // Round to nearest, with exact half values rounded up.
+          if (remainder >= denominator - remainder)
+          {
+            fraction++;
+          }
+          return std::min(weight + fraction, 1 << precisionBits);
+        };
+
         if (((iBestMode != iNonAngMode) && (iSecondaryMode != iNonAngMode)) &&
             ((uiNonAngCost < uiBestCost) || (uiNonAngCost - uiBestCost < (uiBestCost >> 1))))
         {
           useNonAngFusionCandidate = true;
           int iRatio[2];
 
-          // compute 2*sum while checking for overflows
+          // Saturating additions keep malformed/extreme costs deterministic.
           uint64_t s1 = (MAX_UINT64 - uiSecondaryCost < uiBestCost) ? MAX_UINT64 : (uiBestCost + uiSecondaryCost);
-          uint64_t s2 = (MAX_UINT64 - uiNonAngCost < s1) ? MAX_UINT64 : (uiBestCost + uiSecondaryCost + uiNonAngCost);
-          uint64_t s3 = ((2 * s2) < s2) ? MAX_UINT64 : (2 * s2);
+          uint64_t s2 = (MAX_UINT64 - uiNonAngCost < s1) ? MAX_UINT64 : (s1 + uiNonAngCost);
 
-          // reciprocal of 2*sum
-          int x = floorLog2Uint64(s3);
-          CHECK(x < 0, "floor log2 value should be no negative");
-          int normS3 = int(s3 << 4 >> x) & 15;
-          int v      = g_gradDivTable[normS3];
-          x += (normS3 != 0);
-          int shift = x + 3;
-          int add   = (1 << (shift - 1));
-
-          // weight = (sum - cost) / (2*sum)
-          iRatio[0] = int(((s2 - uiBestCost) * v * sumWeight + add) >> shift);
-          if (iRatio[0] > sumWeight)
+          if (s2 == 0)
           {
             iRatio[0] = sumWeight;
+            iRatio[1] = 0;
           }
-          iRatio[1] = int(((s2 - uiSecondaryCost) * v * sumWeight + add) >> shift);
-          if (iRatio[1] > sumWeight)
+          else
           {
-            iRatio[1] = sumWeight;
+            // (sum - cost) / (2 * sum) * 64 == (sum - cost) / sum * 32.
+            iRatio[0] = deriveRoundedWeight(s2 - uiBestCost,      s2, blendSumWeight - 1);
+            iRatio[1] = deriveRoundedWeight(s2 - uiSecondaryCost, s2, blendSumWeight - 1);
           }
 
           timdData.blendMode[2] = iNonAngMode;
@@ -4599,21 +4625,9 @@ int IntraPrediction::deriveTimdMode(const CPelBuf &recoBuf, const CompArea &area
         else
         {
           uint64_t s0 = uiSecondaryCost;
-          // uiBestCost + uiSecondaryCost can overlow uint64_t
+          // uiBestCost + uiSecondaryCost can overflow uint64_t.
           uint64_t s1 = (MAX_UINT64 - uiSecondaryCost < uiBestCost) ? MAX_UINT64 : (uiBestCost + uiSecondaryCost);
-          int      x  = floorLog2Uint64(s1);
-          CHECK(x < 0, "floor log2 value should be no negative");
-          int normS1 = int(s1 << 4 >> x) & 15;
-          int v      = g_gradDivTable[normS1];
-          x += (normS1 != 0);
-          int shift  = x + 3;
-          int add    = (1 << (shift - 1));
-          int iRatio = int((s0 * v * sumWeight + add) >> shift);
-
-          if (iRatio > sumWeight)
-          {
-            iRatio = sumWeight;
-          }
+          int iRatio = s1 == 0 ? sumWeight : deriveRoundedWeight(s0, s1, blendSumWeight);
 
           CHECK(iRatio > sumWeight, "Wrong TIMD ratio");
 
