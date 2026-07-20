@@ -4424,7 +4424,7 @@ int IntraPrediction::deriveTimdMode(const CPelBuf &recoBuf, const CompArea &area
 
         // Refine the cost-derived weights by directly testing the fused prediction on the reconstructed template.
         // The original weights are retained unless a searched weight tuple gives a strictly lower template cost.
-        constexpr int fusionWeightStep = 8;
+        constexpr int fusionWeightStep = 1;
         static Pel    fusionTemplatePred[TIMD_FUSION_NUM]
                                            [(MAX_CU_SIZE + TIMD_SAD_MAX_TEMP_SIZE) *
                                             (MAX_CU_SIZE + TIMD_SAD_MAX_TEMP_SIZE)];
