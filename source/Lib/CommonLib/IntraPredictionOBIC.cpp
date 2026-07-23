@@ -35,6 +35,142 @@
 
 #include "UnitTools.h"
 
+namespace
+{
+template<int N>
+void addObicHistogramVotes(int (&histoLocDep)[NUM_LUMA_MODE][3], const int (&modes)[N],
+                           const int (&locDeps)[N], const int (&weights)[N], const int numSamples)
+{
+  if (numSamples <= 0)
+  {
+    return;
+  }
+
+  int64_t totalWeight = 0;
+  for (int i = 0; i < N; i++)
+  {
+    if (modes[i] >= 0 && modes[i] < NUM_LUMA_MODE && weights[i] > 0)
+    {
+      totalWeight += weights[i];
+    }
+  }
+  if (totalWeight == 0)
+  {
+    return;
+  }
+
+  int     votes[N]      = { 0 };
+  int64_t remainders[N] = { 0 };
+  int     assigned      = 0;
+  for (int i = 0; i < N; i++)
+  {
+    if (modes[i] < 0 || modes[i] >= NUM_LUMA_MODE || weights[i] <= 0)
+    {
+      remainders[i] = -1;
+      continue;
+    }
+
+    const int64_t scaledWeight = int64_t(numSamples) * weights[i];
+    votes[i]                   = int(scaledWeight / totalWeight);
+    remainders[i]              = scaledWeight % totalWeight;
+    assigned += votes[i];
+  }
+
+  // Largest-remainder apportionment makes the per-neighbour votes exactly
+  // equal to numSamples while preserving the relative prediction weights.
+  for (int remaining = numSamples - assigned; remaining > 0; remaining--)
+  {
+    int     bestIdx       = -1;
+    int64_t bestRemainder = -1;
+    for (int i = 0; i < N; i++)
+    {
+      if (remainders[i] > bestRemainder)
+      {
+        bestIdx       = i;
+        bestRemainder = remainders[i];
+      }
+    }
+    CHECK(bestIdx < 0, "No valid OBIC mode available for vote remainder");
+    votes[bestIdx]++;
+    remainders[bestIdx] = -1;
+  }
+
+  int totalVotes = 0;
+  for (int i = 0; i < N; i++)
+  {
+    if (votes[i] > 0)
+    {
+      const int locDep = locDeps[i] >= 0 && locDeps[i] < 3 ? locDeps[i] : 0;
+      histoLocDep[modes[i]][locDep] += votes[i];
+      totalVotes += votes[i];
+    }
+  }
+  CHECK(totalVotes != numSamples, "OBIC votes do not match the weighted neighbour sample count");
+}
+
+void getSgpmObicWeights(const CodingUnit &cu, int (&weights)[2])
+{
+  weights[0] = 0;
+  weights[1] = 0;
+
+  if (cu.sgpmSplitDir < 0 || cu.sgpmSplitDir >= GEO_NUM_PARTITION_MODE)
+  {
+    return;
+  }
+
+  const int width  = cu.lwidth();
+  const int height = cu.lheight();
+  const int angle  = g_geoParams[cu.sgpmSplitDir].angleIdx;
+  const int wIdx   = floorLog2(width) - GEO_MIN_CU_LOG2_EX;
+  const int hIdx   = floorLog2(height) - GEO_MIN_CU_LOG2_EX;
+  int       stepX  = 1;
+  int       stepY  = 0;
+  int16_t  *weight = nullptr;
+
+  const int blendWIdx = cu.cs->pps->m_useSgpmNoBlend ? 0 : GET_SGPM_BLD_IDX(width, height);
+  if (g_angle2mirror[angle] == 2)
+  {
+    stepY  = -(GEO_WEIGHT_MASK_SIZE + width);
+    weight = &g_globalGeoWeights[blendWIdx][g_angle2mask[angle]]
+                                [(GEO_WEIGHT_MASK_SIZE - 1 - g_weightOffsetEx[cu.sgpmSplitDir][hIdx][wIdx][1]) *
+                                   GEO_WEIGHT_MASK_SIZE +
+                                 g_weightOffsetEx[cu.sgpmSplitDir][hIdx][wIdx][0]];
+  }
+  else if (g_angle2mirror[angle] == 1)
+  {
+    stepX  = -1;
+    stepY  = GEO_WEIGHT_MASK_SIZE + width;
+    weight = &g_globalGeoWeights[blendWIdx][g_angle2mask[angle]]
+                                [g_weightOffsetEx[cu.sgpmSplitDir][hIdx][wIdx][1] * GEO_WEIGHT_MASK_SIZE +
+                                 (GEO_WEIGHT_MASK_SIZE - 1 -
+                                  g_weightOffsetEx[cu.sgpmSplitDir][hIdx][wIdx][0])];
+  }
+  else
+  {
+    stepY  = GEO_WEIGHT_MASK_SIZE - width;
+    weight = &g_globalGeoWeights[blendWIdx][g_angle2mask[angle]]
+                                [g_weightOffsetEx[cu.sgpmSplitDir][hIdx][wIdx][1] * GEO_WEIGHT_MASK_SIZE +
+                                 g_weightOffsetEx[cu.sgpmSplitDir][hIdx][wIdx][0]];
+  }
+
+  int64_t weightMode0 = 0;
+  for (int y = 0; y < height; y++)
+  {
+    for (int x = 0; x < width; x++)
+    {
+      weightMode0 += *weight;
+      weight += stepX;
+    }
+    weight += stepY;
+  }
+
+  const int64_t totalWeight = int64_t(32) * width * height;
+  CHECK(weightMode0 < 0 || weightMode0 > totalWeight, "Invalid SGPM blending weights for OBIC");
+  weights[0] = int(weightMode0);
+  weights[1] = int(totalWeight - weightMode0);
+}
+}   // namespace
+
 void IntraPrediction::deriveObicMode(const CPelBuf &recoBuf, const CompArea &area, CodingUnit &cu)
 {
   /* -------------------------------------------------------------------
@@ -80,88 +216,65 @@ void IntraPrediction::deriveObicMode(const CPelBuf &recoBuf, const CompArea &are
     if (cuNeighbours[i]->timdFlag)
     {
       auto &neighbourTimd = cuNeighbours[i]->timdData;
-      int   m             = MAP131TO67(neighbourTimd.blendMode[0]);
-      int   w[3]          = { 0 };
-      w[0]                = neighbourTimd.relWeight[0];
-      w[1] = (neighbourTimd.isBlend && (neighbourTimd.relWeight[1] > 0)) ? neighbourTimd.relWeight[1] : 0;
-      w[2] = (neighbourTimd.isBlend && (neighbourTimd.relWeight[2] > 0)) ? neighbourTimd.relWeight[2] : 0;
-      histoLocDep[m][neighbourTimd.locDep[0]] += numSamples;
-
-      if (neighbourTimd.isBlend && neighbourTimd.relWeight[1] > 0 &&
-          (neighbourTimd.blendMode[0] != neighbourTimd.blendMode[1]))
-      {
-        int m = MAP131TO67(neighbourTimd.blendMode[1]);
-        CHECK(!w[0], "Division by zero!");
-        histoLocDep[m][neighbourTimd.locDep[1]] += numSamples * w[1] / w[0];
-        if (neighbourTimd.relWeight[2] > 0)
-        {
-          int m = MAP131TO67(neighbourTimd.blendMode[2]);
-          histoLocDep[m][neighbourTimd.locDep[2]] += numSamples * w[2] / w[0];
-        }
-      }
+      const int modes[TIMD_FUSION_NUM] = { MAP131TO67(neighbourTimd.blendMode[0]),
+                                           neighbourTimd.isBlend ? MAP131TO67(neighbourTimd.blendMode[1]) : -1,
+                                           neighbourTimd.isBlend ? MAP131TO67(neighbourTimd.blendMode[2]) : -1 };
+      const int locDeps[TIMD_FUSION_NUM] = { neighbourTimd.locDep[0], neighbourTimd.locDep[1],
+                                             neighbourTimd.locDep[2] };
+      const int weights[TIMD_FUSION_NUM] = { neighbourTimd.relWeight[0],
+                                             neighbourTimd.isBlend ? neighbourTimd.relWeight[1] : 0,
+                                             neighbourTimd.isBlend ? neighbourTimd.relWeight[2] : 0 };
+      addObicHistogramVotes(histoLocDep, modes, locDeps, weights, numSamples);
     }
     else if (cuNeighbours[i]->dimdFlag && !cuNeighbours[i]->obicFlag)
     {
-      auto &neighbourDimd      = cuNeighbours[i]->dimdData;
-      int   m                  = neighbourDimd.blendMode[0];
-      int   w[DIMD_FUSION_NUM] = { 0 };
-      w[0]                     = neighbourDimd.relWeight[0];
-      w[1]                     = (neighbourDimd.relWeight[1] > 0) ? neighbourDimd.relWeight[1] : 0;
-      for (int j = 2; j < DIMD_FUSION_NUM; j++)
+      auto &neighbourDimd = cuNeighbours[i]->dimdData;
+      int   modes[DIMD_FUSION_NUM];
+      int   locDeps[DIMD_FUSION_NUM] = { 0 };
+      int   weights[DIMD_FUSION_NUM] = { 0 };
+      std::fill_n(modes, DIMD_FUSION_NUM, -1);
+      if (!neighbourDimd.isBlend)
       {
-        w[j] = (neighbourDimd.isBlend && (neighbourDimd.relWeight[j] > 0)) ? neighbourDimd.relWeight[j] : 0;
+        modes[0]   = neighbourDimd.blendMode[0];
+        weights[0] = neighbourDimd.relWeight[0];
       }
-      if (m >= 0 && m < NUM_LUMA_MODE)
+      else
       {
-        histoLocDep[m][neighbourDimd.locDep[1]] += numSamples; // todo: check locdep: 1 or 0?
-      }
-      if (neighbourDimd.relWeight[1] > 0)
-      {
-        CHECK(!w[0], "Division by zero!");
-        histoLocDep[0][0] += numSamples * w[1] / w[0];
-      }
-      if (neighbourDimd.isBlend)
-      {
-        for (int idx = 2; idx < DIMD_FUSION_NUM; idx++)
+        // In blended DIMD, relWeight[0] belongs to Planar; every following
+        // weight belongs to blendMode[weightIdx - 1].
+        modes[0]   = PLANAR_IDX;
+        weights[0] = neighbourDimd.relWeight[0];
+        for (int weightIdx = 1; weightIdx < DIMD_FUSION_NUM; weightIdx++)
         {
-          m = neighbourDimd.blendMode[idx];
-          if (m >= 0 && m < NUM_LUMA_MODE && neighbourDimd.relWeight[idx] > 0)
-          {
-            CHECK(!w[0], "Division by zero!");
-            histoLocDep[m][neighbourDimd.locDep[idx]] += numSamples * w[idx] / w[0];
-          }
+          modes[weightIdx]   = neighbourDimd.blendMode[weightIdx - 1];
+          locDeps[weightIdx] = neighbourDimd.locDep[weightIdx];
+          weights[weightIdx] = neighbourDimd.relWeight[weightIdx];
         }
       }
+      addObicHistogramVotes(histoLocDep, modes, locDeps, weights, numSamples);
     }
     else if (cuNeighbours[i]->obicFlag)
     {
       auto &neighbourObic = cuNeighbours[i]->obicData;
-      int   m             = neighbourObic.blendMode[0];
-      histoLocDep[m][neighbourObic.locDep[0]] += numSamples;
-      if (neighbourObic.isBlend)
+      int   modes[OBIC_FUSION_NUM];
+      int   locDeps[OBIC_FUSION_NUM] = { 0 };
+      int   weights[OBIC_FUSION_NUM] = { 0 };
+      std::fill_n(modes, OBIC_FUSION_NUM, -1);
+      for (int modeIdx = 0; modeIdx < OBIC_FUSION_NUM; modeIdx++)
       {
-        for (int idx = 1; idx < OBIC_FUSION_NUM; idx++)
-        {
-          m = neighbourObic.blendMode[idx];
-          if (m >= 0 && neighbourObic.relWeight[idx] > 0)
-          {
-            histoLocDep[m][neighbourObic.locDep[idx]] += numSamples;
-          }
-        }
+        modes[modeIdx]   = modeIdx == 0 || neighbourObic.isBlend ? neighbourObic.blendMode[modeIdx] : -1;
+        locDeps[modeIdx] = neighbourObic.locDep[modeIdx];
+        weights[modeIdx] = modeIdx == 0 || neighbourObic.isBlend ? neighbourObic.relWeight[modeIdx] : 0;
       }
+      addObicHistogramVotes(histoLocDep, modes, locDeps, weights, numSamples);
     }
     else if (cuNeighbours[i]->sgpm)
     {
-      int m1 = cuNeighbours[i]->sgpmMode0;
-      int m2 = cuNeighbours[i]->sgpmMode1;
-      if (m1 >= 0 && m1 < NUM_LUMA_MODE)
-      {
-        histoLocDep[m1][0] += numSamples;
-      }
-      if (m2 >= 0 && m2 < NUM_LUMA_MODE)
-      {
-        histoLocDep[m2][0] += numSamples;
-      }
+      const int modes[2]   = { cuNeighbours[i]->sgpmMode0, cuNeighbours[i]->sgpmMode1 };
+      const int locDeps[2] = { 0, 0 };
+      int       weights[2] = { 0, 0 };
+      getSgpmObicWeights(*cuNeighbours[i], weights);
+      addObicHistogramVotes(histoLocDep, modes, locDeps, weights, numSamples);
     }
     else if (cuNeighbours[i]->eipFlag && cu.slice->m_eSliceType != I_SLICE)
     {
