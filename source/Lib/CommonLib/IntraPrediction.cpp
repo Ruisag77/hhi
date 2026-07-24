@@ -3751,7 +3751,7 @@ std::pair<int, int> calculateTimdTemplateSize(const CodingUnit                  
   }
 
   width *= 2;
-  width *= 2;
+  height *= 2;
 
   // clip templates:
   width  = std::min(std::max(cu.lx(), 2), width);
