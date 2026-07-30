@@ -4580,24 +4580,27 @@ bool IntraPrediction::deriveTimdMergeMode(const CPelBuf &recoBuf, const CompArea
   distParam[0].useMR       = false;
   distParam[1].applyWeight = false;
   distParam[1].useMR       = false;
+  // A TIMD-Merge template is one sample thick. The HAD kernels require both dimensions to be at least two samples,
+  // so use SAD for these N x 1 and 1 x N template strips.
+  constexpr int useHadamard = 0;
 
   if (templateType == LEFT_ABOVE_NEIGHBOR)
   {
     m_timdSatdCost->setTimdDistParam(distParam[0], org + templateWidth, pred + templateWidth, orgStride, predStride,
-                                     channelBitDepth, COMP_Y, cu.lwidth(), templateHeight, 0, 1, true);
+                                     channelBitDepth, COMP_Y, cu.lwidth(), templateHeight, 0, 1, useHadamard);
     m_timdSatdCost->setTimdDistParam(distParam[1], org + templateHeight * orgStride,
                                      pred + templateHeight * predStride, orgStride, predStride, channelBitDepth,
-                                     COMP_Y, templateWidth, cu.lheight(), 0, 1, true);
+                                     COMP_Y, templateWidth, cu.lheight(), 0, 1, useHadamard);
   }
   else if (templateType == LEFT_NEIGHBOR)
   {
     m_timdSatdCost->setTimdDistParam(distParam[1], org, pred, orgStride, predStride, channelBitDepth, COMP_Y,
-                                     templateWidth, cu.lheight(), 0, 1, true);
+                                     templateWidth, cu.lheight(), 0, 1, useHadamard);
   }
   else
   {
     m_timdSatdCost->setTimdDistParam(distParam[0], org, pred, orgStride, predStride, channelBitDepth, COMP_Y,
-                                     cu.lwidth(), templateHeight, 0, 1, true);
+                                     cu.lwidth(), templateHeight, 0, 1, useHadamard);
   }
 
   initTimdIntraPatternLuma(cu, area, templateType != ABOVE_NEIGHBOR ? templateWidth : 0,
