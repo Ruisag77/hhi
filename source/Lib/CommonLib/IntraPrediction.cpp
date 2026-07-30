@@ -40,6 +40,7 @@
 #include "Unit.h"
 #include "UnitTools.h"
 #include "Buffer.h"
+#include "TrQuant.h"
 
 #include "dtrace_next.h"
 #include "dtrace_buffer.h"
@@ -1324,7 +1325,16 @@ void IntraPrediction::predIntraTimd(PelBuf &piPred, CodingUnit &cu, const CompAr
 {
   if (!skipDerivation)
   {
-    if (timdMode == TimdMode::Normal)
+    if (timdMode == TimdMode::Merge)
+    {
+      CHECK(!cu.timdMergeFlag, "TIMD-Merge derivation requested without the merge flag");
+      CHECK(!deriveTimdMergeMode(cu.cs->picture->getRecoBuf(area), area, cu),
+            "Signalled TIMD-Merge mode has no valid candidate");
+      cu.derivedIpm[0] = (int8_t) MAP131TO67(cu.timdMergeData.blendMode[0]);
+      cu.derivedIpm[1] = cu.timdMergeData.isBlend ? (int8_t) MAP131TO67(cu.timdMergeData.blendMode[1])
+                                                  : cu.derivedIpm[0];
+    }
+    else if (timdMode == TimdMode::Normal)
     {
       CHECK(alreadyExecutedForNormalMode, "Flag only relevant for SAD Mode");
 
@@ -1350,7 +1360,9 @@ void IntraPrediction::predIntraTimd(PelBuf &piPred, CodingUnit &cu, const CompAr
 
   PROFILER_SCOPE(1, g_timeProfiler, P_INTRA_EST_CAND_LUMA_TIMD);
 
-  const auto &timdData = (timdMode == TimdMode::Normal ? cu.timdData : cu.timdSadData);
+  const auto &timdData = timdMode == TimdMode::Merge
+    ? cu.timdMergeData
+    : (timdMode == TimdMode::Normal ? cu.timdData : cu.timdSadData);
 
   // Do First Prediction
   int            width  = piPred.width;
@@ -3751,7 +3763,7 @@ std::pair<int, int> calculateTimdTemplateSize(const CodingUnit                  
   }
 
   width *= 2;
-  height *= 2;
+  width *= 2;
 
   // clip templates:
   width  = std::min(std::max(cu.lx(), 2), width);
@@ -4443,6 +4455,240 @@ int IntraPrediction::deriveTimdMode(const CPelBuf &recoBuf, const CompArea &area
     }
     return PLANAR_IDX;
   }
+}
+
+bool IntraPrediction::deriveTimdMergeMode(const CPelBuf &recoBuf, const CompArea &area, CodingUnit &cu)
+{
+  cu.timdMergeAvailable         = false;
+  cu.timdMergeData              = {};
+  cu.timdMergeData.isBlend      = false;
+  cu.timdMergeData.blendMode[0] = PLANAR_IDX;
+  cu.timdMergeData.relWeight[0] = 1 << 6;
+  cu.timdMergeTrType[0]         = TransType::DCT2;
+  cu.timdMergeTrType[1]         = TransType::DCT2;
+
+  if (!cu.cs->sps->m_useTIMD || !cu.cs->sps->m_useTIMDMerge || !cu.Y().valid() || cu.predMode != MODE_INTRA ||
+      !isLuma(cu.chType) || cu.bdpcmMode[0] != BdpcmMode::NONE)
+  {
+    return false;
+  }
+
+  const auto cuArea = cu.lwidth() * cu.lheight();
+  if (cuArea <= 16 || (cu.slice->isIntra() && cuArea > 1024))
+  {
+    return false;
+  }
+
+  std::vector<const CodingUnit *> neighbours;
+  if (PU::getTimdMergeNeighbours(cu, neighbours) == 0)
+  {
+    return false;
+  }
+
+  struct TimdMergeCandidate
+  {
+    TimdData  data {};
+    TransType trType[2] { TransType::DCT2, TransType::DCT2 };
+  };
+
+  const auto validMode = [](const int mode) { return mode >= PLANAR_IDX && mode <= EXT_VDIA_IDX; };
+  const auto sameCandidate = [](const TimdMergeCandidate &a, const TimdMergeCandidate &b)
+  {
+    if (a.data.isBlend != b.data.isBlend || a.trType[0] != b.trType[0] || a.trType[1] != b.trType[1])
+    {
+      return false;
+    }
+    for (int i = 0; i < TIMD_FUSION_NUM; i++)
+    {
+      if (a.data.blendMode[i] != b.data.blendMode[i] || a.data.relWeight[i] != b.data.relWeight[i] ||
+          a.data.locDep[i] != b.data.locDep[i])
+      {
+        return false;
+      }
+    }
+    return true;
+  };
+
+  std::vector<TimdMergeCandidate> candidates;
+  candidates.reserve(neighbours.size());
+  for (const CodingUnit *neighbour: neighbours)
+  {
+    TimdMergeCandidate candidate;
+    candidate.data = neighbour->timdMergeFlag ? neighbour->timdMergeData
+                     : neighbour->timdSadFlag ? neighbour->timdSadData
+                                              : neighbour->timdData;
+
+    if (!validMode(candidate.data.blendMode[0]) ||
+        (candidate.data.isBlend && candidate.data.relWeight[1] > 0 &&
+         !validMode(candidate.data.blendMode[1])) ||
+        (candidate.data.isBlend && candidate.data.relWeight[2] > 0 && !validMode(candidate.data.blendMode[2])))
+    {
+      continue;
+    }
+
+    if (CS::isDualITree(*cu.cs) && neighbour->firstTU)
+    {
+      TrQuant::getTrTypes(*neighbour->firstTU, COMP_Y, candidate.trType[0], candidate.trType[1]);
+    }
+
+    if (std::find_if(candidates.begin(), candidates.end(), [&candidate, &sameCandidate](const TimdMergeCandidate &c)
+        { return sameCandidate(candidate, c); }) == candidates.end())
+    {
+      candidates.push_back(candidate);
+    }
+  }
+
+  if (candidates.empty())
+  {
+    return false;
+  }
+
+  cu.timdMergeAvailable = true;
+  if (candidates.size() == 1)
+  {
+    cu.timdMergeData      = candidates.front().data;
+    cu.timdMergeTrType[0] = candidates.front().trType[0];
+    cu.timdMergeTrType[1] = candidates.front().trType[1];
+    return true;
+  }
+
+  constexpr int templateWidth  = 1;
+  constexpr int templateHeight = 1;
+  const auto templateInfo = CU::deriveTimdRefTypePositionAndSize(cu, templateWidth, templateHeight);
+  const auto templateType = templateInfo.eTemplateType;
+  if (templateType == NO_NEIGHBOR)
+  {
+    cu.timdMergeData      = candidates.front().data;
+    cu.timdMergeTrType[0] = candidates.front().trType[0];
+    cu.timdMergeTrType[1] = candidates.front().trType[1];
+    return true;
+  }
+
+  const auto [refX, refY]          = templateInfo.iRefPosition;
+  const auto [refWidth, refHeight] = templateInfo.uiRefSize;
+  const int channelBitDepth        = cu.slice->m_sps->m_bitDepths[ChannelType::LUMA];
+  constexpr ptrdiff_t predStride   = MAX_CU_SIZE + 2;
+  Pel predLuma[(MAX_CU_SIZE + 2) * (MAX_CU_SIZE + 2)];
+  Pel *pred = predLuma;
+
+  const Pel *org       = recoBuf.buf;
+  const int  orgStride = static_cast<int>(recoBuf.stride);
+  org += (refY - cu.ly()) * orgStride + (refX - cu.lx());
+
+  DistParam distParam[2];   // above, left
+  distParam[0].applyWeight = false;
+  distParam[0].useMR       = false;
+  distParam[1].applyWeight = false;
+  distParam[1].useMR       = false;
+
+  if (templateType == LEFT_ABOVE_NEIGHBOR)
+  {
+    m_timdSatdCost->setTimdDistParam(distParam[0], org + templateWidth, pred + templateWidth, orgStride, predStride,
+                                     channelBitDepth, COMP_Y, cu.lwidth(), templateHeight, 0, 1, true);
+    m_timdSatdCost->setTimdDistParam(distParam[1], org + templateHeight * orgStride,
+                                     pred + templateHeight * predStride, orgStride, predStride, channelBitDepth,
+                                     COMP_Y, templateWidth, cu.lheight(), 0, 1, true);
+  }
+  else if (templateType == LEFT_NEIGHBOR)
+  {
+    m_timdSatdCost->setTimdDistParam(distParam[1], org, pred, orgStride, predStride, channelBitDepth, COMP_Y,
+                                     templateWidth, cu.lheight(), 0, 1, true);
+  }
+  else
+  {
+    m_timdSatdCost->setTimdDistParam(distParam[0], org, pred, orgStride, predStride, channelBitDepth, COMP_Y,
+                                     cu.lwidth(), templateHeight, 0, 1, true);
+  }
+
+  initTimdIntraPatternLuma(cu, area, templateType != ABOVE_NEIGHBOR ? templateWidth : 0,
+                           templateType != LEFT_NEIGHBOR ? templateHeight : 0, refWidth, refHeight);
+  m_ipaParam.multiRefIndex = templateWidth;
+
+  const uint32_t realWidth  = refWidth + (templateType == LEFT_NEIGHBOR ? templateWidth : 0);
+  const uint32_t realHeight = refHeight + (templateType == ABOVE_NEIGHBOR ? templateHeight : 0);
+
+  std::array<uint64_t, EXT_VDIA_IDX + 1> modeCosts;
+  modeCosts.fill(MAX_UINT64);
+  const auto getModeCost = [&](const int mode)
+  {
+    uint64_t &cost = modeCosts[mode];
+    if (cost != MAX_UINT64)
+    {
+      return cost;
+    }
+
+    initPredTimdIntraParams(cu, area, mode, false);
+    predTimdIntraAng(COMP_Y, cu, mode, pred, predStride, realWidth, realHeight, templateType,
+                     templateType == ABOVE_NEIGHBOR ? 0 : templateWidth,
+                     templateType == LEFT_NEIGHBOR ? 0 : templateHeight);
+
+    cost = templateType == LEFT_ABOVE_NEIGHBOR
+      ? distParam[0].distFunc(distParam[0]) + distParam[1].distFunc(distParam[1])
+      : (templateType == ABOVE_NEIGHBOR ? distParam[0].distFunc(distParam[0]) : distParam[1].distFunc(distParam[1]));
+    return cost;
+  };
+
+  const auto addSaturated = [](const uint64_t a, const uint64_t b)
+  { return MAX_UINT64 - a < b ? MAX_UINT64 : a + b; };
+  const auto multiplySaturated = [](const uint64_t a, const uint64_t b)
+  { return a != 0 && b > MAX_UINT64 / a ? MAX_UINT64 : a * b; };
+
+  const auto getCandidateCost = [&](const TimdMergeCandidate &candidate)
+  {
+    uint64_t costs[TIMD_FUSION_NUM] {};
+    int      numActive = 0;
+    costs[numActive++] = getModeCost(candidate.data.blendMode[0]);
+    if (candidate.data.isBlend && candidate.data.relWeight[1] > 0)
+    {
+      costs[numActive++] = getModeCost(candidate.data.blendMode[1]);
+    }
+    if (candidate.data.isBlend && candidate.data.relWeight[2] > 0)
+    {
+      costs[numActive++] = getModeCost(candidate.data.blendMode[2]);
+    }
+
+    if (numActive == 1)
+    {
+      return costs[0];
+    }
+
+    uint64_t sumCost = 0;
+    for (int i = 0; i < numActive; i++)
+    {
+      sumCost = addSaturated(sumCost, costs[i]);
+    }
+    if (sumCost == 0)
+    {
+      return uint64_t { 0 };
+    }
+
+    uint64_t weightedCost = 0;
+    for (int i = 0; i < numActive; i++)
+    {
+      weightedCost = addSaturated(weightedCost, multiplySaturated(costs[i], sumCost - costs[i]));
+    }
+    const uint64_t denominator = numActive == 2
+      ? sumCost
+      : (sumCost > (MAX_UINT64 >> 1) ? MAX_UINT64 : (sumCost << 1));
+    return addSaturated(weightedCost, denominator >> 1) / denominator;
+  };
+
+  int      bestCandidate = 0;
+  uint64_t bestCost      = getCandidateCost(candidates[0]);
+  for (int i = 1; i < int(candidates.size()); i++)
+  {
+    const uint64_t cost = getCandidateCost(candidates[i]);
+    if (cost < bestCost)
+    {
+      bestCost      = cost;
+      bestCandidate = i;
+    }
+  }
+
+  cu.timdMergeData      = candidates[bestCandidate].data;
+  cu.timdMergeTrType[0] = candidates[bestCandidate].trType[0];
+  cu.timdMergeTrType[1] = candidates[bestCandidate].trType[1];
+  return true;
 }
 
 void IntraPrediction::deriveSgpmModeOrdered(const CPelBuf &recoBuf, const CompArea &area, CodingUnit &cu,

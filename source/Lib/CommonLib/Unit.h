@@ -486,6 +486,10 @@ struct CodingUnit : public UnitArea, public IntraPredictionData, public InterPre
   TimdData    timdData;
   bool        timdSadFlag;
   TimdData    timdSadData;
+  bool        timdMergeFlag;
+  bool        timdMergeAvailable;
+  TimdData    timdMergeData;
+  TransType   timdMergeTrType[2];   // horizontal, vertical
   bool        obicAvailFlag;
   bool        obicFlag;
   ObicData    obicData;

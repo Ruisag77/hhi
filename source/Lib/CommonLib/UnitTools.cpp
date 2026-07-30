@@ -281,6 +281,29 @@ bool CU::allowTimdSad(const CodingUnit &cu)
   return cu.cs->sps->m_useTIMD;
 }
 
+bool CU::allowTimdMerge(const CodingUnit &cu)
+{
+  if (!cu.cs->sps->m_useTIMD || !cu.cs->sps->m_useTIMDMerge || !cu.Y().valid() || cu.predMode != MODE_INTRA ||
+      !isLuma(cu.chType) || cu.bdpcmMode[0] != BdpcmMode::NONE)
+  {
+    return false;
+  }
+
+  const auto cuArea = cu.lwidth() * cu.lheight();
+  if (cuArea <= 16 || (cu.slice->isIntra() && cuArea > 1024))
+  {
+    return false;
+  }
+
+  if (cu.cs->pcv->isEncoder)
+  {
+    return cu.timdMergeAvailable;
+  }
+
+  std::vector<const CodingUnit *> neighbours;
+  return PU::getTimdMergeNeighbours(cu, neighbours) > 0;
+}
+
 bool CU::isSameSlice(const CodingUnit &cu, const CodingUnit &cu2)
 {
   return cu.slice->m_independentSliceIdx == cu2.slice->m_independentSliceIdx;
@@ -1054,6 +1077,127 @@ bool PU::isDIMDChroma(const CodingUnit &cu, const ChannelType chType)
 }
 
 bool PU::isTIMD(const CodingUnit &cu, const ChannelType chType) { return cu.timdFlag && isLuma(chType); }
+
+int PU::getTimdMergeNeighbours(const CodingUnit &cu, std::vector<const CodingUnit *> &cuNeighbours)
+{
+  cuNeighbours.clear();
+
+  if (!cu.Y().valid() || cu.predMode != MODE_INTRA || !isLuma(cu.chType))
+  {
+    return 0;
+  }
+
+  std::vector<const CodingUnit *> candidates;
+  candidates.reserve(NUM_TIMD_MERGE_CUS);
+
+  const auto addCandidate = [&candidates](const CodingUnit *neighbour)
+  {
+    if (neighbour && CU::isIntra(*neighbour) && neighbour->timdFlag)
+    {
+      candidates.push_back(neighbour);
+    }
+  };
+
+  const int step = 4;
+  const CodingUnit *cuLeft = nullptr;
+  for (int y = 0; y <= int(cu.lheight()); y += step)
+  {
+    cuLeft = cu.cs->getCURestricted(cu.lumaPos().offset(-1, y), cu, ChannelType::LUMA);
+    addCandidate(cuLeft);
+  }
+
+  const CodingUnit *cuTop = nullptr;
+  for (int x = 0; x <= int(cu.lwidth()); x += step)
+  {
+    cuTop = cu.cs->getCURestricted(cu.lumaPos().offset(x, -1), cu, ChannelType::LUMA);
+    addCandidate(cuTop);
+  }
+
+  addCandidate(cu.cs->getCURestricted(cu.lumaPos().offset(-1, -1), cu, ChannelType::LUMA));
+
+  const CodingUnit *cuLeft2 = cuLeft
+    ? cu.cs->getCURestricted(cuLeft->lumaPos().offset(cuLeft->lwidth() - 1, cuLeft->lheight()), cu,
+                             ChannelType::LUMA)
+    : nullptr;
+  const CodingUnit *cuTop2 = cuTop
+    ? cu.cs->getCURestricted(cuTop->lumaPos().offset(cuTop->lwidth(), cuTop->lheight() - 1), cu, ChannelType::LUMA)
+    : nullptr;
+  addCandidate(cuLeft2);
+  addCandidate(cuTop2);
+  addCandidate(cuLeft2
+                 ? cu.cs->getCURestricted(cuLeft2->lumaPos().offset(cuLeft2->lwidth() - 1, cuLeft2->lheight()), cu,
+                                          ChannelType::LUMA)
+                 : nullptr);
+  addCandidate(cuTop2
+                 ? cu.cs->getCURestricted(cuTop2->lumaPos().offset(cuTop2->lwidth(), cuTop2->lheight() - 1), cu,
+                                          ChannelType::LUMA)
+                 : nullptr);
+
+  const Position topLeft = cu.Y().topLeft();
+  const int      numNACandidate[4] = { 3, 5, 5, 5 };
+  const int      idxMap[4][5]      = { { 0, 1, 4 }, { 0, 1, 2, 3, 4 }, { 0, 1, 2, 3, 4 }, { 0, 1, 2, 3, 4 } };
+
+  for (int distanceIdx = 0; distanceIdx < NADISTANCE_LEVEL; distanceIdx++)
+  {
+    const int distanceHor = cu.lwidth() * (distanceIdx + 1);
+    const int distanceVer = cu.lheight() * (distanceIdx + 1);
+
+    for (int posIdx = 0; posIdx < numNACandidate[distanceIdx]; posIdx++)
+    {
+      int offsetX = 0;
+      int offsetY = 0;
+      switch (idxMap[distanceIdx][posIdx])
+      {
+      case 0:
+        offsetX = -distanceHor - 1;
+        offsetY = cu.lheight() + distanceVer - 1;
+        break;
+      case 1:
+        offsetX = cu.lwidth() + distanceHor - 1;
+        offsetY = -distanceVer - 1;
+        break;
+      case 2:
+        offsetX = cu.lwidth() >> 1;
+        offsetY = -distanceVer - 1;
+        break;
+      case 3:
+        offsetX = -distanceHor - 1;
+        offsetY = cu.lheight() >> 1;
+        break;
+      case 4:
+        offsetX = -distanceHor - 1;
+        offsetY = -distanceVer - 1;
+        break;
+      default:
+        THROW("Invalid TIMD-Merge neighbour position");
+      }
+      addCandidate(cu.cs->getCURestricted(topLeft.offset(offsetX, offsetY), cu, ChannelType::LUMA));
+    }
+  }
+
+  std::vector<const CodingUnit *> uniqueCandidates;
+  uniqueCandidates.reserve(candidates.size());
+  for (const CodingUnit *candidate: candidates)
+  {
+    const auto duplicate = std::find_if(uniqueCandidates.begin(), uniqueCandidates.end(), [candidate](const CodingUnit *other)
+    { return candidate->lumaPos() == other->lumaPos(); });
+    if (duplicate == uniqueCandidates.end())
+    {
+      uniqueCandidates.push_back(candidate);
+    }
+  }
+
+  std::stable_sort(uniqueCandidates.begin(), uniqueCandidates.end(), [&cu](const CodingUnit *a, const CodingUnit *b)
+  {
+    const int distanceA = abs(int(cu.lx()) - int(a->lx())) + abs(int(cu.ly()) - int(a->ly()));
+    const int distanceB = abs(int(cu.lx()) - int(b->lx())) + abs(int(cu.ly()) - int(b->ly()));
+    return distanceA < distanceB;
+  });
+
+  const int numNeighbours = std::min<int>(TIMD_MERGE_MAX_NEIGHBOURS, uniqueCandidates.size());
+  cuNeighbours.assign(uniqueCandidates.begin(), uniqueCandidates.begin() + numNeighbours);
+  return numNeighbours;
+}
 
 bool PU::isOBIC(const CodingUnit &cu, const ChannelType chType) { return cu.obicFlag && isLuma(chType); }
 

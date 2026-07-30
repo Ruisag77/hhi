@@ -84,7 +84,7 @@ public:
   // initialize class
   void init(const Quant *otherQuant, const uint32_t uiMaxTrSize, const bool bUseRDOQ, const bool bUseRDOQTS,
             const bool useSelectiveRDOQ, const bool bEnc);
-  void getTrTypes(const TransformUnit &tu, const CompID compID, TransType &trTypeHor, TransType &trTypeVer);
+  static void getTrTypes(const TransformUnit &tu, const CompID compID, TransType &trTypeHor, TransType &trTypeVer);
 
   bool getTransposeFlag(uint32_t intraMode);
 

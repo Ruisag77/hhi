@@ -768,28 +768,51 @@ bool IntraSearch::estIntraPredLumaQT(CodingUnit &cu, Partitioner &partitioner, C
         cu.timdFlag    = true;
         piPred.buf     = sortedPelUnitBufs.getTestBuf().Y().buf;
 
-        for (const auto timdMode: { IntraPrediction::TimdMode::Normal, IntraPrediction::TimdMode::SAD })
+        cu.timdMergeAvailable = false;
+        if (cs.sps->m_useTIMDMerge)
+        {
+          deriveTimdMergeMode(cs.picture->getRecoBuf(cu.blocks[COMP_Y]), cu.blocks[COMP_Y], cu);
+        }
+
+        for (const auto timdMode: { IntraPrediction::TimdMode::Normal, IntraPrediction::TimdMode::SAD,
+                                    IntraPrediction::TimdMode::Merge })
         {
           if (timdMode == IntraPrediction::TimdMode::SAD && (!CU::allowTimdSad(cu) || !cs.sps->m_useTIMDSAD))
           {
             continue;
           }
+          if (timdMode == IntraPrediction::TimdMode::Merge && !CU::allowTimdMerge(cu))
+          {
+            continue;
+          }
 
           const auto alreadyExecutedForNormalMode = (timdMode == IntraPrediction::TimdMode::SAD);
+          const auto skipDerivation                = (timdMode == IntraPrediction::TimdMode::Merge);
 
-          predIntraTimd(piPred, cu, cu.blocks[COMP_Y], false, timdMode, alreadyExecutedForNormalMode);
+          cu.timdSadFlag   = (timdMode == IntraPrediction::TimdMode::SAD);
+          cu.timdMergeFlag = (timdMode == IntraPrediction::TimdMode::Merge);
+          if (cu.timdMergeFlag)
+          {
+            cu.derivedIpm[0] = (int8_t) MAP131TO67(cu.timdMergeData.blendMode[0]);
+            cu.derivedIpm[1] = cu.timdMergeData.isBlend ? (int8_t) MAP131TO67(cu.timdMergeData.blendMode[1])
+                                                        : cu.derivedIpm[0];
+          }
+
+          predIntraTimd(piPred, cu, cu.blocks[COMP_Y], skipDerivation, timdMode, alreadyExecutedForNormalMode);
           numModesForFullRD++;
           ModeInfo miTIMD(PlanarDirType::NO_DIR, -1);
-          miTIMD.timdFlg       = true;
-          miTIMD.timdSadFlg    = (timdMode == IntraPrediction::TimdMode::SAD);
-          miTIMD.modeId        = cu.intraDir[ChannelType::LUMA];
-          miTIMD.derivedIpm[0] = cu.derivedIpm[0];
-          miTIMD.derivedIpm[1] = cu.derivedIpm[1];
+          miTIMD.timdFlg        = true;
+          miTIMD.timdSadFlg     = cu.timdSadFlag;
+          miTIMD.timdMergeFlg   = cu.timdMergeFlag;
+          miTIMD.modeId         = cu.intraDir[ChannelType::LUMA];
+          miTIMD.derivedIpm[0]  = cu.derivedIpm[0];
+          miTIMD.derivedIpm[1]  = cu.derivedIpm[1];
           updateCandList(miTIMD, 0, rdModeList, candCostList, numModesForFullRD);
         }
 
-        cu.timdFlag    = false;   // Not needed, just to be sure
-        cu.timdSadFlag = false;
+        cu.timdFlag      = false;   // Not needed, just to be sure
+        cu.timdSadFlag   = false;
+        cu.timdMergeFlag = false;
       }
       if (m_encCfg->m_bFastUDIUseMPMEnabled)
       {
@@ -970,6 +993,7 @@ void IntraSearch::setCuPredDataLuma(CodingUnit &cu, const ModeInfo &mi)
   cu.dimdFlag                    = mi.dimdFlg;
   cu.timdFlag                    = mi.timdFlg;
   cu.timdSadFlag                 = mi.timdSadFlg;
+  cu.timdMergeFlag               = mi.timdMergeFlg;
   cu.obicFlag                    = mi.obicFlg;
   cu.obicAvailFlag               = mi.obicAvailFlg;
   cu.eipFlag                     = mi.eipFlg;
@@ -995,6 +1019,8 @@ void IntraSearch::setCuPredDataLuma(CodingUnit &cu, const ModeInfo &mi)
   CHECK(mi.dimdFlg && (mi.mipFlg || (mi.mRefId != 0)), "Error, combination with dimd not supported");
   CHECK(mi.timdFlg && (mi.dimdFlg || mi.mipFlg || (mi.mRefId != 0)), "Error, combination with timd not supported");
   CHECK(mi.timdSadFlg && !mi.timdFlg, "In case of Sad mode, both flags must be set");
+  CHECK(mi.timdMergeFlg && (!mi.timdFlg || mi.timdSadFlg),
+        "TIMD-Merge requires TIMD and is mutually exclusive with TIMD-SAD");
 }
 
 void IntraSearch::setCuPredDataChroma(CodingUnit &cu, const ChromaModeInfo &miCh, const uint32_t *chromaCandModes)
@@ -3611,7 +3637,9 @@ void IntraSearch::xPredTuLuma(TransformUnit &tu, PelBuf &pred)
   else if (PU::isTIMD(cu))
   {
     CodingUnit &cuNonConst = *tu.cu;
-    const auto  timdMode   = (cu.timdSadFlag) ? IntraPrediction::TimdMode::SAD : IntraPrediction::TimdMode::Normal;
+    const auto  timdMode   = cu.timdMergeFlag ? IntraPrediction::TimdMode::Merge
+                            : cu.timdSadFlag   ? IntraPrediction::TimdMode::SAD
+                                              : IntraPrediction::TimdMode::Normal;
     predIntraTimd(pred, cuNonConst, area, true, timdMode, false);
   }
   else if (PU::isOBIC(cu))

@@ -218,6 +218,7 @@ private:
     bool          dimdFlg { false };      // CU::dimdFlg
     bool          timdFlg { false };      // CU::timdFlag
     bool          timdSadFlg { false };   // CU::timdSadFlag
+    bool          timdMergeFlg { false }; // CU::timdMergeFlag
     bool          obicFlg { false };      // CU::obicFlg
     bool          obicAvailFlg { false }; // CU::obicAvailFlag
     bool          eipFlg { false };       // CU::eipFlg
@@ -262,6 +263,7 @@ private:
     {
       return (mipFlg == cmp.mipFlg && mipTrFlg == cmp.mipTrFlg && mRefId == cmp.mRefId && modeId == cmp.modeId &&
               bdpcm == cmp.bdpcm && plIdx == cmp.plIdx && dimdFlg == cmp.dimdFlg && timdFlg == cmp.timdFlg &&
+              timdSadFlg == cmp.timdSadFlg && timdMergeFlg == cmp.timdMergeFlg &&
               obicFlg == cmp.obicFlg && obicAvailFlg == cmp.obicAvailFlg && eipFlg == cmp.eipFlg &&
               sgpmFlg == cmp.sgpmFlg && sgpmInfo == cmp.sgpmInfo);
     }

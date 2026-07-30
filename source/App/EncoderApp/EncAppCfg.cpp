@@ -5881,6 +5881,7 @@ void EncAppCfg::xPrintParameter(EncCfg *encCfg)
   msg(VERBOSE, "DIMD chroma:%d ", encCfg->m_DIMDChroma);
   msg(VERBOSE, "TIMD:%d ", encCfg->m_TIMD);
   msg(VERBOSE, "TIMDSAD:%d ", encCfg->m_TIMDSAD);
+  msg(VERBOSE, "TIMDMerge:%d ", encCfg->m_TIMD);
   msg(VERBOSE, "OBIC:%d ", encCfg->m_OBIC);
   msg(VERBOSE, "EIP:%d ", encCfg->m_EIP);
   msg(VERBOSE, "MMEIP:%d ", encCfg->m_MMEIP);

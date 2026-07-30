@@ -304,6 +304,8 @@ static const int EXT_DIA_IDX            = 66;
 static const int EXT_VER_IDX            = 98;
 static const int EXT_VDIA_IDX           = 130;
 static const int TIMD_FUSION_NUM        = 3;
+static const int NUM_TIMD_MERGE_CUS         = 13 + 18;   // adjacent and non-adjacent positions
+static const int TIMD_MERGE_MAX_NEIGHBOURS = 5;
 #define MAP131TO67(mode) (mode < 2 ? mode : ((mode >> 1) + 1))
 #define MAP67TO131(mode) (mode < 2 ? mode : ((mode << 1) - 2))
 

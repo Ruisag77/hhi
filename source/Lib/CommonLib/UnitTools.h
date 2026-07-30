@@ -104,6 +104,7 @@ bool    isSameSbtSize(const uint8_t sbtInfo1, const uint8_t sbtInfo2);
 bool    getRprScaling(const SPS *sps, const PPS *curPPS, Picture *refPic, ScalingRatio &scalingRatio);
 void    checkConformanceILRP(Slice *slice);
 bool    allowTimdSad(const CodingUnit &cu);
+bool    allowTimdMerge(const CodingUnit &cu);
 
 bool isObmcAllowed(const CodingUnit &cu);
 
@@ -141,6 +142,7 @@ bool     isMIP(const CodingUnit &cu, const ChannelType chType = ChannelType::LUM
 bool     isDIMD(const CodingUnit &cu, const ChannelType chType = ChannelType::LUMA);
 bool     isDIMDChroma(const CodingUnit &cu, const ChannelType chType = ChannelType::CHROMA);
 bool     isTIMD(const CodingUnit &cu, const ChannelType chType = ChannelType::LUMA);
+int      getTimdMergeNeighbours(const CodingUnit &cu, std::vector<const CodingUnit *> &cuNeighbours);
 bool     isOBIC(const CodingUnit &cu, const ChannelType chType = ChannelType::LUMA);
 bool     isEIP(const CodingUnit &cu, const ChannelType chType = ChannelType::LUMA);
 void     interpretLumaIntraMode(CodingUnit &cu);

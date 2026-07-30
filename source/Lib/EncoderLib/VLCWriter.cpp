@@ -1538,6 +1538,7 @@ void HLSWriter::codeSPS(const SPS *pcSPS)
   if (pcSPS->m_useTIMD)
   {
     xWriteFlag(pcSPS->m_useTIMDSAD ? 1 : 0, "sps_timd_sad_enabled_flag");
+    xWriteFlag(pcSPS->m_useTIMDMerge ? 1 : 0, "sps_timd_merge_enabled_flag");
   }
   xWriteFlag(pcSPS->m_useEIP ? 1 : 0, "sps_eip_enabled_flag");
   xWriteFlag(pcSPS->m_useMMEIP ? 1 : 0, "sps_mmeip_enabled_flag");

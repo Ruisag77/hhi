@@ -1803,6 +1803,7 @@ void CABACReader::intra_luma_pred_mode(CodingUnit &cu)
   if (cu.timdFlag)
   {
     timd_sad_flag(cu);
+    timd_merge_flag(cu);
     return;
   }
   eip_flag(cu);
@@ -4819,6 +4820,23 @@ void CABACReader::timd_sad_flag(CodingUnit &cu)
     DTRACE(g_trace_ctx, D_SYNTAX, "timd_sad_flag() pos=(%d,%d) size=(%d,%d) mode=%d\n", cu.lumaPos().x, cu.lumaPos().y,
            cu.lumaSize().width, cu.lumaSize().height, cu.timdSadFlag);
   }
+}
+
+void CABACReader::timd_merge_flag(CodingUnit &cu)
+{
+  RExt__DECODER_DEBUG_BIT_STATISTICS_CREATE_SET_SIZE(STATS__CABAC_BITS__TIMD_MERGE_FLAG, cu.lumaSize());
+
+  cu.timdMergeFlag = false;
+  if (!cu.Y().valid() || !cu.cs->sps->m_useTIMDMerge || !cu.timdFlag || cu.timdSadFlag ||
+      !CU::allowTimdMerge(cu))
+  {
+    return;
+  }
+
+  const unsigned ctxId = cu.lumaSize().area() >= 64 ? 0 : 1;
+  cu.timdMergeFlag = m_binDecoder.decodeBin(Ctx::TimdMergeFlag(ctxId));
+  DTRACE(g_trace_ctx, D_SYNTAX, "timd_merge_flag() ctx=%d pos=(%d,%d) size=(%d,%d) mode=%d\n", ctxId,
+         cu.lumaPos().x, cu.lumaPos().y, cu.lumaSize().width, cu.lumaSize().height, cu.timdMergeFlag);
 }
 
 void CABACReader::eip_flag(CodingUnit &cu)

@@ -396,7 +396,8 @@ public:
   enum class TimdMode
   {
     Normal,
-    SAD
+    SAD,
+    Merge
   };
   void predIntraTimd(PelBuf &piPred, CodingUnit &cu, const CompArea &area, bool skipDerivation, const TimdMode timdMode,
                      const bool alreadyExecutedForNormalMode);
@@ -409,6 +410,7 @@ public:
   };
   int deriveTimdMode(const CPelBuf &recoBuf, const CompArea &area, CodingUnit &cu,
                      const TimdDerivationMethod timdDerivationMode);
+  bool deriveTimdMergeMode(const CPelBuf &recoBuf, const CompArea &area, CodingUnit &cu);
 
   using TimdModeCostList = static_vector<std::pair<uint64_t, int>, NUM_LUMA_MODE>;
   TimdModeCostList m_timdModeCostList;

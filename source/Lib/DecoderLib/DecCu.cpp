@@ -323,7 +323,15 @@ void DecCu::xIntraRecBlk(TransformUnit &tu, const CompID compID)
       else if (PU::isTIMD(cu, chType))
       {
         CodingUnit &cuNonConst = *tu.cu;
-        if (cu.timdSadFlag)
+        if (cu.timdMergeFlag)
+        {
+          m_pcIntraPred->predIntraTimd(piPred, cuNonConst, area, false, IntraPrediction::TimdMode::Merge, false);
+#if RExt__DECODER_DEBUG_TOOL_STATISTICS
+          CodingStatistics::IncrementStatisticTool(
+            CodingStatisticsClassType { STATS__TOOL_TIMD_MERGE, cu.lwidth(), cu.lheight(), compID });
+#endif
+        }
+        else if (cu.timdSadFlag)
         {
           m_pcIntraPred->deriveDimdMode(cuNonConst.dimdData, cu.cs->picture->getRecoBuf(area), area, *tu.cu);
           m_pcIntraPred->predIntraTimd(piPred, cuNonConst, area, false, IntraPrediction::TimdMode::SAD, false);

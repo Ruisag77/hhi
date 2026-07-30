@@ -723,6 +723,30 @@ const CtxSet ContextSetCfg::TimdSadFlag = ContextSetCfg::addCtxSet
     { 135 },
 });
 
+const CtxSet ContextSetCfg::TimdMergeFlag = ContextSetCfg::addCtxSet
+({
+  {  49,  49 },
+  {  49,  57 },
+  {  26,  26 },
+  {  19,  49 },
+  { DWS,  10 },
+  { DWS,   4 },
+  { DWS, DWS },
+  {   9,  12 },
+  {  32,  32 },
+  {  32,  32 },
+  { DWE, DWE },
+  {  32,  32 },
+  {  83,  80 },
+  { 252, 234 },
+  {  82,  99 },
+  { 201, 252 },
+  { 101, 101 },
+  { 117, 122 },
+  {  97, 162 },
+  { 152, 131 },
+});
+
 const CtxSet ContextSetCfg::ObicFlag = ContextSetCfg::addCtxSet
 ({
  {  41, },
