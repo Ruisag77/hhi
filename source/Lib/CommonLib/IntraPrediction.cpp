@@ -4631,49 +4631,11 @@ bool IntraPrediction::deriveTimdMergeMode(const CPelBuf &recoBuf, const CompArea
     return cost;
   };
 
-  const auto addSaturated = [](const uint64_t a, const uint64_t b)
-  { return MAX_UINT64 - a < b ? MAX_UINT64 : a + b; };
-  const auto multiplySaturated = [](const uint64_t a, const uint64_t b)
-  { return a != 0 && b > MAX_UINT64 / a ? MAX_UINT64 : a * b; };
-
   const auto getCandidateCost = [&](const TimdMergeCandidate &candidate)
   {
-    uint64_t costs[TIMD_FUSION_NUM] {};
-    int      numActive = 0;
-    costs[numActive++] = getModeCost(candidate.data.blendMode[0]);
-    if (candidate.data.isBlend && candidate.data.relWeight[1] > 0)
-    {
-      costs[numActive++] = getModeCost(candidate.data.blendMode[1]);
-    }
-    if (candidate.data.isBlend && candidate.data.relWeight[2] > 0)
-    {
-      costs[numActive++] = getModeCost(candidate.data.blendMode[2]);
-    }
-
-    if (numActive == 1)
-    {
-      return costs[0];
-    }
-
-    uint64_t sumCost = 0;
-    for (int i = 0; i < numActive; i++)
-    {
-      sumCost = addSaturated(sumCost, costs[i]);
-    }
-    if (sumCost == 0)
-    {
-      return uint64_t { 0 };
-    }
-
-    uint64_t weightedCost = 0;
-    for (int i = 0; i < numActive; i++)
-    {
-      weightedCost = addSaturated(weightedCost, multiplySaturated(costs[i], sumCost - costs[i]));
-    }
-    const uint64_t denominator = numActive == 2
-      ? sumCost
-      : (sumCost > (MAX_UINT64 >> 1) ? MAX_UINT64 : (sumCost << 1));
-    return addSaturated(weightedCost, denominator >> 1) / denominator;
+    // The reduced-complexity TIMD-Merge ranks an inherited parameter package using only its primary mode. Once a
+    // package is selected, its secondary/non-angular modes, fusion weights and location dependencies are still used.
+    return getModeCost(candidate.data.blendMode[0]);
   };
 
   int      bestCandidate = 0;
