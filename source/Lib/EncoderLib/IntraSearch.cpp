@@ -515,9 +515,11 @@ bool IntraSearch::estIntraPredLumaQT(CodingUnit &cu, Partitioner &partitioner, C
         cu.mipFlag     = true;
         cu.multiRefIdx = 0;
 
-        double mipHadCost[MAX_NUM_MIP_MODE] = { MAX_DOUBLE };
+        double mipHadCost[MAX_NUM_MIP_MODE];
+        std::fill_n(mipHadCost, MAX_NUM_MIP_MODE, MAX_DOUBLE);
 
         initIntraPatternChType(cu, cu.Y());
+        cu.bvgMipFlag = PU::bvgMipAvailable(cu);
         initIntraMip(cu, cu.Y());
 
         const int transpOff    = MatrixIntraPrediction::getNumModesMip(cu.Y());
@@ -534,12 +536,14 @@ bool IntraSearch::estIntraPredLumaQT(CodingUnit &cu, Partitioner &partitioner, C
 
           // Use the min between SAD and HAD as the cost criterion
           // SAD is scaled by 2 to align with the scaling of HAD
-          Distortion minSadHad = std::min(distParamSad.distFunc(distParamSad) * 2, distParamHad.distFunc(distParamHad));
-          uint64_t   fracModeBits = xFracModeBitsIntra(cu, mode, ChannelType::LUMA, cuCtxIntra);
+          Distortion minSadHad =
+            std::min(distParamSad.distFunc(distParamSad) * 2, distParamHad.distFunc(distParamHad));
+          uint64_t fracModeBits = xFracModeBitsIntra(cu, mode, ChannelType::LUMA, cuCtxIntra);
 
           double cost          = (double)minSadHad + (double)fracModeBits * sqrtLambdaForFirstPass;
           mipHadCost[modeFull] = cost;
-          DTRACE(g_trace_ctx, D_INTRA_COST, "IntraMIP: %u, %llu, %f (%d)\n", minSadHad, fracModeBits, cost, modeFull);
+          DTRACE(g_trace_ctx, D_INTRA_COST, "%s: %u, %llu, %f (%d)\n",
+                 cu.bvgMipFlag ? "IntraBvgMIP" : "IntraMIP", minSadHad, fracModeBits, cost, modeFull);
 
           const ModeInfo mi(true, isTransposed, 0, mode, bufferIdx++);
           int            insertPos = -1;
@@ -551,7 +555,8 @@ bool IntraSearch::estIntraPredLumaQT(CodingUnit &cu, Partitioner &partitioner, C
         const double thresholdHadCost = 1.0 + 1.4 / sqrt((double)(cu.lwidth() * cu.lheight()));
         xReduceHadCandList(rdModeList, candCostList, sortedPelUnitBufs, numModesForFullRD, thresholdHadCost, mipHadCost,
                            cu, fastMip);
-        cu.mipFlag = false;
+        cu.mipFlag    = false;
+        cu.bvgMipFlag = false;
       }
 
       if (testSgpm)
@@ -914,9 +919,9 @@ bool IntraSearch::estIntraPredLumaQT(CodingUnit &cu, Partitioner &partitioner, C
       bool tmpValidReturn = xRecurIntraCodingLumaQT(*csTemp, partitioner, cand, cuCtxIntra);
       validReturn |= tmpValidReturn;
 
-      DTRACE(g_trace_ctx, D_INTRA_COST, "IntraCost T [x=%d,y=%d,w=%d,h=%d] %f (%d,%d,%d) \n", cu.blocks[0].x,
+      DTRACE(g_trace_ctx, D_INTRA_COST, "IntraCost T [x=%d,y=%d,w=%d,h=%d] %f (%d,%d,%d,%d) \n", cu.blocks[0].x,
              cu.blocks[0].y, (int)partitioner.currArea().lwidth(), (int)partitioner.currArea().lheight(), csTemp->cost,
-             cand.modeId, cu.multiRefIdx, cu.mipFlag);
+             cand.modeId, cu.multiRefIdx, cu.mipFlag, cu.bvgMipFlag);
 
       if (tmpValidReturn)
       {
@@ -961,6 +966,7 @@ void IntraSearch::setCuPredDataLuma(CodingUnit &cu, const ModeInfo &mi)
   CHECK(mi.plIdx != PlanarDirType::NO_DIR && mi.modeId != 0, "Error, directional index only for planar");
   cu.mipFlag                     = mi.mipFlg;
   cu.mipTransposedFlag           = mi.mipTrFlg;
+  cu.bvgMipFlag                  = cu.mipFlag && PU::bvgMipAvailable(cu);
   cu.multiRefIdx                 = mi.mRefId;
   cu.intraDir[ChannelType::LUMA] = mi.modeId;
   cu.bdpcmMode[0]                = mi.bdpcm;

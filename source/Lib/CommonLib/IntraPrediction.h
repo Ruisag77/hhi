@@ -319,6 +319,8 @@ protected:
   Position getEipRecoPosition(const CodingUnit &cu, const CompID compId) const;
   void     setEipInputVector(PelBuf &reco, int w, int h, int filterShape, Pel *inputs);
   Pel      getEipInputsAvg(Pel *inputs, ConvModelType filterShape) const;
+  bool     xGetBvgMipRef(const CodingUnit &cu, const CompArea &area, const CPelBuf &localRef, Pel *bvgRefTop,
+                         Pel *bvgRefLeft) const;
 
 public:
   IntraPrediction();

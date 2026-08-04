@@ -4706,6 +4706,7 @@ unsigned CABACReader::exp_golomb_eqprob(unsigned count)
 void CABACReader::mip_flag(CodingUnit &cu)
 {
   RExt__DECODER_DEBUG_BIT_STATISTICS_CREATE_SET_SIZE(STATS__CABAC_BITS__MIP, cu.lumaSize());
+  cu.bvgMipFlag = false;
 
   if (!cu.Y().valid())
   {
@@ -4736,6 +4737,7 @@ void CABACReader::mip_pred_modes(CodingUnit &cu)
 
 void CABACReader::mip_pred_mode(CodingUnit &cu)
 {
+  cu.bvgMipFlag = PU::bvgMipAvailable(cu);
   cu.mipTransposedFlag = bool(m_binDecoder.decodeBinEP());
 
   uint32_t  mipMode;

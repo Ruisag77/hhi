@@ -48,7 +48,8 @@ public:
   MatrixIntraPrediction();
   ~MatrixIntraPrediction();
 
-  void prepareInputForPred(const CPelBuf &pSrc, const Area &block, const int bitDepth, const CompID compId);
+  void prepareInputForPred(const CPelBuf &pSrc, const Area &block, const int bitDepth, const CompID compId,
+                           const Pel *bvgRefTop = nullptr, const Pel *bvgRefLeft = nullptr);
   void predBlock(Pel *const result, const int modeIdx, const bool transpose, const int bitDepth, const CompID compId);
 
   static int getNumModesMip(const Size &block);

@@ -104,8 +104,9 @@ int MatrixIntraPrediction::getNumModesMip(const Size &block)
 }
 
 void MatrixIntraPrediction::prepareInputForPred(const CPelBuf &pSrc, const Area &block, const int bitDepth,
-                                                const CompID compId)
+                                                const CompID compId, const Pel *bvgRefTop, const Pel *bvgRefLeft)
 {
+  CHECK((bvgRefTop == nullptr) != (bvgRefLeft == nullptr), "Both BVG-MIP reference boundaries must be provided.");
   m_component = compId;
 
   // Step 1: Save block size and calculate dependent values
@@ -134,6 +135,22 @@ void MatrixIntraPrediction::prepareInputForPred(const CPelBuf &pSrc, const Area 
     leftReducedTransposed[y] = leftReduced[y];
   }
 
+  Pel bvgReducedBoundary[MIP_MAX_INPUT_SIZE];
+  Pel bvgReducedBoundaryTransp[MIP_MAX_INPUT_SIZE];
+  if (bvgRefTop != nullptr)
+  {
+    Pel *const bvgTopReduced  = bvgReducedBoundary;
+    Pel *const bvgLeftReduced = bvgReducedBoundary + m_reducedBdrySize;
+    boundaryDownsampling1D(bvgTopReduced, bvgRefTop, block.width, m_reducedBdrySize);
+    boundaryDownsampling1D(bvgLeftReduced, bvgRefLeft, block.height, m_reducedBdrySize);
+
+    for (int i = 0; i < m_reducedBdrySize; i++)
+    {
+      bvgReducedBoundaryTransp[i]                     = bvgLeftReduced[i];
+      bvgReducedBoundaryTransp[i + m_reducedBdrySize] = bvgTopReduced[i];
+    }
+  }
+
   // Step 4: Rebase the reduced boundary
   m_inputOffset       = m_reducedBoundary[0];
   m_inputOffsetTransp = m_reducedBoundaryTransp[0];
@@ -144,8 +161,24 @@ void MatrixIntraPrediction::prepareInputForPred(const CPelBuf &pSrc, const Area 
   m_reducedBoundaryTransp[0] = hasFirstCol ? ((1 << (bitDepth - 1)) - m_inputOffsetTransp) : 0;
   for (int i = 1; i < inputSize; i++)
   {
-    m_reducedBoundary[i] -= m_inputOffset;
-    m_reducedBoundaryTransp[i] -= m_inputOffsetTransp;
+    const int localDiff       = m_reducedBoundary[i] - m_inputOffset;
+    const int localDiffTransp = m_reducedBoundaryTransp[i] - m_inputOffsetTransp;
+    if (bvgRefTop == nullptr)
+    {
+      m_reducedBoundary[i]       = localDiff;
+      m_reducedBoundaryTransp[i] = localDiffTransp;
+      continue;
+    }
+
+    const int bvgDiff       = bvgReducedBoundary[i] - bvgReducedBoundary[0];
+    const int bvgDiffTransp = bvgReducedBoundaryTransp[i] - bvgReducedBoundaryTransp[0];
+    const int sum           = localDiff + bvgDiff;
+    const int sumTransp     = localDiffTransp + bvgDiffTransp;
+    const int rounding      = 1 << (BVG_MIP_BLEND_SHIFT - 1);
+    m_reducedBoundary[i] = sum >= 0 ? (sum + rounding) >> BVG_MIP_BLEND_SHIFT
+                                    : -(((-sum) + rounding) >> BVG_MIP_BLEND_SHIFT);
+    m_reducedBoundaryTransp[i] = sumTransp >= 0 ? (sumTransp + rounding) >> BVG_MIP_BLEND_SHIFT
+                                                : -(((-sumTransp) + rounding) >> BVG_MIP_BLEND_SHIFT);
   }
 }
 

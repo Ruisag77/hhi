@@ -1043,6 +1043,103 @@ bool PU::isMIP(const CodingUnit &cu, const ChannelType chType)
   }
 }
 
+static bool isBvgMipBvValid(const CodingUnit &cu, const Mv &bv)
+{
+  if (bv == Mv(0, 0) || !cu.Y().valid())
+  {
+    return false;
+  }
+
+  const int refX   = cu.lx() + bv.getHor();
+  const int refY   = cu.ly() + bv.getVer();
+  const int width  = cu.lwidth();
+  const int height = cu.lheight();
+  const CPelBuf reco = cu.cs->picture->getRecoBuf(COMP_Y);
+
+  // The remote block and its external top/left boundaries are both used by BVG-MIP.
+  if (refX <= 0 || refY <= 0 || refX + width > reco.width || refY + height > reco.height)
+  {
+    return false;
+  }
+
+  const Position checkPos[] = {
+    Position(refX,             refY),
+    Position(refX + width - 1, refY),
+    Position(refX,             refY + height - 1),
+    Position(refX + width - 1, refY + height - 1),
+    Position(refX,             refY - 1),
+    Position(refX + width - 1, refY - 1),
+    Position(refX - 1,         refY),
+    Position(refX - 1,         refY + height - 1)
+  };
+
+  for (const Position &pos: checkPos)
+  {
+    if (!cu.cs->isDecomp(pos, ChannelType::LUMA) ||
+        cu.cs->getCURestricted(pos, cu, ChannelType::LUMA) == nullptr)
+    {
+      return false;
+    }
+  }
+  return true;
+}
+
+void PU::getBvgMipCands(const CodingUnit &cu, static_vector<Mv, NUM_BVG_MIP_CANDS> &bvCands)
+{
+  bvCands.clear();
+  if (!cu.Y().valid())
+  {
+    return;
+  }
+
+  const Position posLT = cu.Y().topLeft();
+  const Position posRT = cu.Y().topRight();
+  const Position posLB = cu.Y().bottomLeft();
+  const Position neighborPos[NUM_BVG_MIP_CANDS] = {
+    posLT.offset(-1, -1),
+    posLB.offset(-1, 0),
+    posRT.offset(0, -1),
+    Position(posLT.x - 1, posLT.y + (cu.lheight() >> 1)),
+    Position(posLT.x + (cu.lwidth() >> 1), posLT.y - 1)
+  };
+
+  for (const Position &pos: neighborPos)
+  {
+    const CodingUnit *neighbor = cu.cs->getCURestricted(pos, cu, ChannelType::LUMA);
+    if (neighbor == nullptr || !CU::isIBC(*neighbor) || !isBvgMipBvValid(cu, neighbor->bv))
+    {
+      continue;
+    }
+
+    bool duplicate = false;
+    for (const Mv &candidate: bvCands)
+    {
+      if (candidate == neighbor->bv)
+      {
+        duplicate = true;
+        break;
+      }
+    }
+    if (!duplicate)
+    {
+      bvCands.push_back(neighbor->bv);
+    }
+  }
+}
+
+bool PU::bvgMipAvailable(const CodingUnit &cu)
+{
+  if (!cu.Y().valid() || !CU::isIntra(cu) || !cu.cs->sps->m_useMIP || cu.lwidth() > MIP_MAX_WIDTH ||
+      cu.lheight() > MIP_MAX_HEIGHT)
+  {
+    return false;
+  }
+
+  static_vector<Mv, NUM_BVG_MIP_CANDS> bvCands;
+  getBvgMipCands(cu, bvCands);
+  return !bvCands.empty();
+}
+
 bool PU::isDIMD(const CodingUnit &cu, const ChannelType chType)
 {
   return cu.dimdFlag && !cu.obicFlag && isLuma(chType);

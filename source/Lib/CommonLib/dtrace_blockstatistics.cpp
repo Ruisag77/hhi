@@ -911,6 +911,8 @@ void writeAllData(const CodingStructure &cs, const UnitArea &ctuArea)
           {
             DTRACE_BLOCK_SCALAR(g_trace_ctx, D_BLOCK_STATISTICS_ALL, cu, GetBlockStatisticName(BlockStatistic::MIPFlag),
                                 cu.mipFlag);
+            DTRACE_BLOCK_SCALAR(g_trace_ctx, D_BLOCK_STATISTICS_ALL, cu,
+                                GetBlockStatisticName(BlockStatistic::BvgMIPFlag), cu.bvgMipFlag);
           }
 
           for (auto chType = ChannelType::LUMA; chType <= ::getLastChannel(cu.chromaFormat); chType++)

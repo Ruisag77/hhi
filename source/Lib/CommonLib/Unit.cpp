@@ -289,6 +289,7 @@ CodingUnit &CodingUnit::operator=(const CodingUnit &other)
   derivedIpm[1]    = other.derivedIpm[1];
   smvdMode         = other.smvdMode;
   mipFlag          = other.mipFlag;
+  bvgMipFlag       = other.bvgMipFlag;
   dimdFlag         = other.dimdFlag;
   dimdData         = other.dimdData;
   dimdChromaFlag   = other.dimdChromaFlag;
@@ -438,6 +439,7 @@ void CodingUnit::initCuData()
   derivedIpm[1]  = -1;
   smvdMode       = 0;
   mipFlag        = false;
+  bvgMipFlag     = false;
   dimdFlag       = false;
   dimdData       = {};
   dimdChromaFlag = false;

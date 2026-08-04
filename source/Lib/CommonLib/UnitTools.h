@@ -138,6 +138,8 @@ int      getIntraMPMs(const CodingUnit &pu, uint8_t *mpm, uint8_t *non_mpm);
 void     getGeoIntraMPMs(const CodingUnit &cu, uint8_t *mpm, uint8_t splitDir, uint8_t shape);
 void     getSgpmIntraMPMs(const CodingUnit &cu, uint8_t *mpm, uint8_t splitDir, uint8_t shape, int dimdMode);
 bool     isMIP(const CodingUnit &cu, const ChannelType chType = ChannelType::LUMA);
+bool     bvgMipAvailable(const CodingUnit &cu);
+void     getBvgMipCands(const CodingUnit &cu, static_vector<Mv, NUM_BVG_MIP_CANDS> &bvCands);
 bool     isDIMD(const CodingUnit &cu, const ChannelType chType = ChannelType::LUMA);
 bool     isDIMDChroma(const CodingUnit &cu, const ChannelType chType = ChannelType::CHROMA);
 bool     isTIMD(const CodingUnit &cu, const ChannelType chType = ChannelType::LUMA);

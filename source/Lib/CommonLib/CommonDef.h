@@ -369,9 +369,11 @@ static constexpr int NUM_MOST_PROBABLE_MODES = NUM_PRIMARY_MOST_PROBABLE_MODES +
 static constexpr int NUM_NON_MPM_MODES       = NUM_LUMA_MODE - NUM_MOST_PROBABLE_MODES;
 static constexpr int LM_SYMBOL_NUM           = (1 + NUM_LMC_MODE);
 
-static constexpr int      MAX_NUM_MIP_MODE   = 32;   ///< maximum number of MIP pred. modes
-static constexpr int      SGPM_NUM           = 16;
-static constexpr int      SGPM_VIPM_TH       = 2;
+static constexpr int      MAX_NUM_MIP_MODE    = 32;   ///< maximum number of MIP pred. modes
+static constexpr int      NUM_BVG_MIP_CANDS   = 5;
+static constexpr int      BVG_MIP_BLEND_SHIFT = 1;   ///< equal blend of local and BV-guided boundary differences
+static constexpr int      SGPM_NUM            = 16;
+static constexpr int      SGPM_VIPM_TH        = 2;
 static constexpr uint32_t MAX_SGPM_VIPM_SIZE = 256;
 static constexpr int      FAST_UDI_MAX_RDMODE_NUM =
   (NUM_LUMA_MODE + MAX_NUM_MIP_MODE + SGPM_NUM +

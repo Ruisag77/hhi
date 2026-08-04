@@ -5485,6 +5485,75 @@ void IntraPrediction::xGetLumaRecPixels(const CodingUnit &cu, CompArea chromaAre
   }
 }
 
+bool IntraPrediction::xGetBvgMipRef(const CodingUnit &cu, const CompArea &area, const CPelBuf &localRef,
+                                   Pel *bvgRefTop, Pel *bvgRefLeft) const
+{
+  static_vector<Mv, NUM_BVG_MIP_CANDS> bvCands;
+  PU::getBvgMipCands(cu, bvCands);
+  if (bvCands.empty())
+  {
+    return false;
+  }
+
+  const Pel *localTop  = localRef.bufAt(1, 0);
+  const Pel *localLeft = localRef.bufAt(1, 1);
+  const int  numSamples = area.width + area.height;
+  int64_t    localSum   = 0;
+  for (int x = 0; x < area.width; x++)
+  {
+    localSum += localTop[x];
+  }
+  for (int y = 0; y < area.height; y++)
+  {
+    localSum += localLeft[y];
+  }
+
+  const CPelBuf reco = cu.cs->picture->getRecoBuf(COMP_Y);
+  int64_t bestCost   = std::numeric_limits<int64_t>::max();
+  for (const Mv &bv: bvCands)
+  {
+    const int refX = area.x + bv.getHor();
+    const int refY = area.y + bv.getVer();
+    int64_t   refSum = 0;
+    for (int x = 0; x < area.width; x++)
+    {
+      refSum += reco.at(refX + x, refY - 1);
+    }
+    for (int y = 0; y < area.height; y++)
+    {
+      refSum += reco.at(refX - 1, refY + y);
+    }
+
+    const int64_t sumDiff = localSum - refSum;
+    const int meanOffset = sumDiff >= 0 ? int((sumDiff + (numSamples >> 1)) / numSamples)
+                                        : -int(((-sumDiff) + (numSamples >> 1)) / numSamples);
+    int64_t cost = 0;
+    for (int x = 0; x < area.width; x++)
+    {
+      cost += std::abs(int64_t(localTop[x]) - (int64_t(reco.at(refX + x, refY - 1)) + meanOffset));
+    }
+    for (int y = 0; y < area.height; y++)
+    {
+      cost += std::abs(int64_t(localLeft[y]) - (int64_t(reco.at(refX - 1, refY + y)) + meanOffset));
+    }
+
+    if (cost >= bestCost)
+    {
+      continue;
+    }
+    bestCost = cost;
+    for (int x = 0; x < area.width; x++)
+    {
+      bvgRefTop[x] = reco.at(refX + x, refY - 1);
+    }
+    for (int y = 0; y < area.height; y++)
+    {
+      bvgRefLeft[y] = reco.at(refX - 1, refY + y);
+    }
+  }
+  return bestCost != std::numeric_limits<int64_t>::max();
+}
+
 void IntraPrediction::initIntraMip(const CodingUnit &cu, const CompArea &area)
 {
   CHECK(area.width > MIP_MAX_WIDTH || area.height > MIP_MAX_HEIGHT, "Error: block size not supported for MIP");
@@ -5495,8 +5564,18 @@ void IntraPrediction::initIntraMip(const CodingUnit &cu, const CompArea &area)
   const int srcStride  = m_refBufferStride[area.compID];
   const int srcHStride = 2;
 
-  m_matrixIntraPred.prepareInputForPred(CPelBuf(ptrSrc, srcStride, srcHStride), area,
-                                        cu.slice->m_sps->m_bitDepths[toChannelType(area.compID)], area.compID);
+  const CPelBuf localRef(ptrSrc, srcStride, srcHStride);
+  Pel           bvgRefTop[MIP_MAX_WIDTH];
+  Pel           bvgRefLeft[MIP_MAX_HEIGHT];
+  const bool    useBvgMip = area.compID == COMP_Y && cu.bvgMipFlag;
+  if (useBvgMip)
+  {
+    CHECK(!xGetBvgMipRef(cu, area, localRef, bvgRefTop, bvgRefLeft), "No valid BVG-MIP reference found.");
+  }
+
+  m_matrixIntraPred.prepareInputForPred(localRef, area,
+                                        cu.slice->m_sps->m_bitDepths[toChannelType(area.compID)], area.compID,
+                                        useBvgMip ? bvgRefTop : nullptr, useBvgMip ? bvgRefLeft : nullptr);
 }
 
 void IntraPrediction::predIntraMip(const CompID compId, PelBuf &piPred, const CodingUnit &cu)
@@ -5519,7 +5598,8 @@ void IntraPrediction::predIntraMip(const CompID compId, PelBuf &piPred, const Co
     int16_t       *filter  = sizeIdx >= 0
              ? (cu.mipTransposedFlag ? g_pdpFiltersMip[modeIdx + 16][sizeIdx] : g_pdpFiltersMip[modeIdx][sizeIdx])
              : nullptr;
-    if (cu.cs->sps->m_pdpEnabledFlag && m_refAvailable && filter && cu.plDir == PlanarDirType::NO_DIR && !cu.sgpm &&
+    if (!cu.bvgMipFlag && cu.cs->sps->m_pdpEnabledFlag && m_refAvailable && filter &&
+        cu.plDir == PlanarDirType::NO_DIR && !cu.sgpm &&
         !cu.dimdFlag && !cu.timdFlag && !cu.multiRefIdx)
     {
       const ClpRng &clpRng(cu.cs->slice->clpRng(compId));

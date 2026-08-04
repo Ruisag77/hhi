@@ -477,6 +477,7 @@ struct CodingUnit : public UnitArea, public IntraPredictionData, public InterPre
   int         refIdxBi[2];
   int8_t      derivedIpm[2];
   bool        mipFlag;
+  bool        bvgMipFlag;
   bool        dimdFlag;
   DimdData    dimdData;
   bool        dimdChromaFlag;
