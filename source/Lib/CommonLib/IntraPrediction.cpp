@@ -5567,15 +5567,13 @@ void IntraPrediction::initIntraMip(const CodingUnit &cu, const CompArea &area)
   const CPelBuf localRef(ptrSrc, srcStride, srcHStride);
   Pel           bvgRefTop[MIP_MAX_WIDTH];
   Pel           bvgRefLeft[MIP_MAX_HEIGHT];
-  const bool    useBvgMip = area.compID == COMP_Y && cu.bvgMipFlag;
-  if (useBvgMip)
-  {
-    CHECK(!xGetBvgMipRef(cu, area, localRef, bvgRefTop, bvgRefLeft), "No valid BVG-MIP reference found.");
-  }
+  m_bvgMipInputActive = area.compID == COMP_Y && cu.bvgMipFlag &&
+                        xGetBvgMipRef(cu, area, localRef, bvgRefTop, bvgRefLeft);
 
   m_matrixIntraPred.prepareInputForPred(localRef, area,
                                         cu.slice->m_sps->m_bitDepths[toChannelType(area.compID)], area.compID,
-                                        useBvgMip ? bvgRefTop : nullptr, useBvgMip ? bvgRefLeft : nullptr);
+                                        m_bvgMipInputActive ? bvgRefTop : nullptr,
+                                        m_bvgMipInputActive ? bvgRefLeft : nullptr);
 }
 
 void IntraPrediction::predIntraMip(const CompID compId, PelBuf &piPred, const CodingUnit &cu)
@@ -5598,7 +5596,7 @@ void IntraPrediction::predIntraMip(const CompID compId, PelBuf &piPred, const Co
     int16_t       *filter  = sizeIdx >= 0
              ? (cu.mipTransposedFlag ? g_pdpFiltersMip[modeIdx + 16][sizeIdx] : g_pdpFiltersMip[modeIdx][sizeIdx])
              : nullptr;
-    if (!cu.bvgMipFlag && cu.cs->sps->m_pdpEnabledFlag && m_refAvailable && filter &&
+    if (!m_bvgMipInputActive && cu.cs->sps->m_pdpEnabledFlag && m_refAvailable && filter &&
         cu.plDir == PlanarDirType::NO_DIR && !cu.sgpm &&
         !cu.dimdFlag && !cu.timdFlag && !cu.multiRefIdx)
     {

@@ -210,6 +210,7 @@ private:
   {
     bool          mipFlg { false };       // CU::mipFlag
     bool          mipTrFlg { false };     // CU::mipTransposedFlag
+    bool          bvgMipFlg { false };    // CU::bvgMipFlag
     uint8_t       mRefId { 0 };       // CU::multiRefIdx
     uint32_t      modeId { 0 };       // CU::intraDir[ChannelType::LUMA]
     BdpcmMode     bdpcm { BdpcmMode::NONE };        // CU::bdpcnMode[0]
@@ -231,17 +232,20 @@ private:
     ModeInfo() = default;
 
     ModeInfo(const bool mipf, const bool miptf, const int mrid, const uint32_t mode, PlanarDirType plDirid,
-             const int bufIdx)
+             const int bufIdx, const bool bvgMipf = false)
       : mipFlg(mipf)
       , mipTrFlg(miptf)
+      , bvgMipFlg(bvgMipf)
       , mRefId(mrid)
       , modeId(mode)
       , plIdx(plDirid)
       , bufferIdx(bufIdx)
     {}
-    ModeInfo(const bool mipf, const bool miptf, const int mrid, const uint32_t mode, const int bufIdx)
+    ModeInfo(const bool mipf, const bool miptf, const int mrid, const uint32_t mode, const int bufIdx,
+             const bool bvgMipf = false)
       : mipFlg(mipf)
       , mipTrFlg(miptf)
+      , bvgMipFlg(bvgMipf)
       , mRefId(mrid)
       , modeId(mode)
       , bufferIdx(bufIdx)
@@ -260,10 +264,11 @@ private:
     {}
     bool operator==(const ModeInfo &cmp) const
     {
-      return (mipFlg == cmp.mipFlg && mipTrFlg == cmp.mipTrFlg && mRefId == cmp.mRefId && modeId == cmp.modeId &&
-              bdpcm == cmp.bdpcm && plIdx == cmp.plIdx && dimdFlg == cmp.dimdFlg && timdFlg == cmp.timdFlg &&
-              obicFlg == cmp.obicFlg && obicAvailFlg == cmp.obicAvailFlg && eipFlg == cmp.eipFlg &&
-              sgpmFlg == cmp.sgpmFlg && sgpmInfo == cmp.sgpmInfo);
+      return (mipFlg == cmp.mipFlg && mipTrFlg == cmp.mipTrFlg && bvgMipFlg == cmp.bvgMipFlg &&
+              mRefId == cmp.mRefId && modeId == cmp.modeId && bdpcm == cmp.bdpcm && plIdx == cmp.plIdx &&
+              dimdFlg == cmp.dimdFlg && timdFlg == cmp.timdFlg && obicFlg == cmp.obicFlg &&
+              obicAvailFlg == cmp.obicAvailFlg && eipFlg == cmp.eipFlg && sgpmFlg == cmp.sgpmFlg &&
+              sgpmInfo == cmp.sgpmInfo);
     }
   };
 
@@ -548,7 +553,8 @@ protected:
   template<typename T, size_t N>
   void xReduceHadCandList(static_vector<T, N> &candModeList, static_vector<double, N> &candCostList,
                           SortedPelUnitBufs &sortedPelBuffer, int &numModesForFullRD, const double thresholdHadCost,
-                          const double *mipHadCost, const CodingUnit &cu, const bool fastMip);
+                          const double *mipHadCost, const bool *mipHadBvgFlag, const CodingUnit &cu,
+                          const bool fastMip);
   void xDerivePLTLossy(CodingStructure &cs, Partitioner &partitioner, CompID compBegin, uint32_t numComp);
   void xCalcPixelPred(CodingStructure &cs, Partitioner &partitioner, uint32_t yPos, uint32_t xPos, CompID compBegin,
                       uint32_t numComp);

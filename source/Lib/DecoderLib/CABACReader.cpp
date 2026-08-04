@@ -4737,7 +4737,7 @@ void CABACReader::mip_pred_modes(CodingUnit &cu)
 
 void CABACReader::mip_pred_mode(CodingUnit &cu)
 {
-  cu.bvgMipFlag = PU::bvgMipAvailable(cu);
+  bvg_mip_flag(cu);
   cu.mipTransposedFlag = bool(m_binDecoder.decodeBinEP());
 
   uint32_t  mipMode;
@@ -4748,6 +4748,19 @@ void CABACReader::mip_pred_mode(CodingUnit &cu)
 
   DTRACE(g_trace_ctx, D_SYNTAX, "mip_pred_mode() pos=(%d,%d) mode=%d transposed=%d\n", cu.lumaPos().x, cu.lumaPos().y,
          cu.intraDir[ChannelType::LUMA], cu.mipTransposedFlag ? 1 : 0);
+}
+
+void CABACReader::bvg_mip_flag(CodingUnit &cu)
+{
+  cu.bvgMipFlag = false;
+  if (!PU::bvgMipAvailable(cu))
+  {
+    return;
+  }
+
+  cu.bvgMipFlag = bool(m_binDecoder.decodeBinEP());
+  DTRACE(g_trace_ctx, D_SYNTAX, "bvg_mip_flag() pos=(%d,%d) mode=%d\n", cu.lumaPos().x, cu.lumaPos().y,
+         cu.bvgMipFlag ? 1 : 0);
 }
 
 void CABACReader::planarDir(CodingUnit &cu)

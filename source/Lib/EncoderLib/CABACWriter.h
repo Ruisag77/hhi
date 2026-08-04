@@ -141,6 +141,7 @@ public:
   void sbt_mode(const CodingUnit &cu);
   void end_of_ctu(const CodingUnit &cu, CUCtx &cuCtx);
   void mip_flag(const CodingUnit &cu);
+  void bvg_mip_flag(const CodingUnit &cu);
   void mip_pred_mode(const CodingUnit &cu);
   void cu_palette_info(const CodingUnit &cu, CompID compBegin, uint32_t numComp, CUCtx &cuCtx);
   void cuPaletteSubblockInfo(const CodingUnit &cu, CompID compBegin, uint32_t numComp, int subSetId,

@@ -190,6 +190,7 @@ private:
 
   Pel                  *m_piTemp;
   MatrixIntraPrediction m_matrixIntraPred;
+  bool                  m_bvgMipInputActive { false };
   RdCost               *m_timdSatdCost = nullptr;
 
   Area m_eipBlkArea;

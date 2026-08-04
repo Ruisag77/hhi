@@ -124,6 +124,7 @@ public:
   void sbt_mode(CodingUnit &cu);
   void end_of_ctu(CodingUnit &cu, CUCtx &cuCtx);
   void mip_flag(CodingUnit &cu);
+  void bvg_mip_flag(CodingUnit &cu);
   void mip_pred_modes(CodingUnit &cu);
   void mip_pred_mode(CodingUnit &cu);
   void cu_palette_info(CodingUnit &cu, CompID compBegin, uint32_t numComp, CUCtx &cuCtx);

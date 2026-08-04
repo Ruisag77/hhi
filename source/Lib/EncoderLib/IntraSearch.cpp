@@ -516,45 +516,56 @@ bool IntraSearch::estIntraPredLumaQT(CodingUnit &cu, Partitioner &partitioner, C
         cu.multiRefIdx = 0;
 
         double mipHadCost[MAX_NUM_MIP_MODE];
+        bool   mipHadBvgFlag[MAX_NUM_MIP_MODE];
         std::fill_n(mipHadCost, MAX_NUM_MIP_MODE, MAX_DOUBLE);
+        std::fill_n(mipHadBvgFlag, MAX_NUM_MIP_MODE, false);
 
         initIntraPatternChType(cu, cu.Y());
-        cu.bvgMipFlag = PU::bvgMipAvailable(cu);
-        initIntraMip(cu, cu.Y());
 
         const int transpOff    = MatrixIntraPrediction::getNumModesMip(cu.Y());
         const int numModesFull = (transpOff << 1);
-        for (uint32_t modeFull = 0; modeFull < numModesFull; modeFull++)
+        const bool testBvgMip   = PU::bvgMipAvailable(cu);
+        const int  numBvgPasses = testBvgMip ? 2 : 1;
+        for (int bvgPass = 0; bvgPass < numBvgPasses; bvgPass++)
         {
-          const bool     isTransposed = modeFull >= transpOff;
-          const uint32_t mode         = isTransposed ? modeFull - transpOff : modeFull;
+          cu.bvgMipFlag = bvgPass != 0;
+          initIntraMip(cu, cu.Y());
+          for (uint32_t modeFull = 0; modeFull < numModesFull; modeFull++)
+          {
+            const bool     isTransposed = modeFull >= transpOff;
+            const uint32_t mode         = isTransposed ? modeFull - transpOff : modeFull;
 
-          cu.mipTransposedFlag           = isTransposed;
-          cu.intraDir[ChannelType::LUMA] = mode;
-          distParamHad.cur.buf = distParamSad.cur.buf = piPred.buf = sortedPelUnitBufs.getTestBuf().Y().buf;
-          predIntraMip(COMP_Y, piPred, cu);
+            cu.mipTransposedFlag           = isTransposed;
+            cu.intraDir[ChannelType::LUMA] = mode;
+            distParamHad.cur.buf = distParamSad.cur.buf = piPred.buf = sortedPelUnitBufs.getTestBuf().Y().buf;
+            predIntraMip(COMP_Y, piPred, cu);
 
-          // Use the min between SAD and HAD as the cost criterion
-          // SAD is scaled by 2 to align with the scaling of HAD
-          Distortion minSadHad =
-            std::min(distParamSad.distFunc(distParamSad) * 2, distParamHad.distFunc(distParamHad));
-          uint64_t fracModeBits = xFracModeBitsIntra(cu, mode, ChannelType::LUMA, cuCtxIntra);
+            // Use the min between SAD and HAD as the cost criterion
+            // SAD is scaled by 2 to align with the scaling of HAD
+            Distortion minSadHad =
+              std::min(distParamSad.distFunc(distParamSad) * 2, distParamHad.distFunc(distParamHad));
+            uint64_t fracModeBits = xFracModeBitsIntra(cu, mode, ChannelType::LUMA, cuCtxIntra);
 
-          double cost          = (double)minSadHad + (double)fracModeBits * sqrtLambdaForFirstPass;
-          mipHadCost[modeFull] = cost;
-          DTRACE(g_trace_ctx, D_INTRA_COST, "%s: %u, %llu, %f (%d)\n",
-                 cu.bvgMipFlag ? "IntraBvgMIP" : "IntraMIP", minSadHad, fracModeBits, cost, modeFull);
+            double cost = (double)minSadHad + (double)fracModeBits * sqrtLambdaForFirstPass;
+            if (cost < mipHadCost[modeFull])
+            {
+              mipHadCost[modeFull]    = cost;
+              mipHadBvgFlag[modeFull] = cu.bvgMipFlag;
+            }
+            DTRACE(g_trace_ctx, D_INTRA_COST, "%s: %u, %llu, %f (%d)\n",
+                   cu.bvgMipFlag ? "IntraBvgMIP" : "IntraMIP", minSadHad, fracModeBits, cost, modeFull);
 
-          const ModeInfo mi(true, isTransposed, 0, mode, bufferIdx++);
-          int            insertPos = -1;
-          updateCandList(mi, cost, rdModeList, candCostList, numModesForFullRD + 1, &insertPos);
-          updateCandList(mi, 0.8 * (double)minSadHad, hadModeList, candHadList, numHadCand);
-          sortedPelUnitBufs.insert(insertPos, rdModeList.size());
+            const ModeInfo mi(true, isTransposed, 0, mode, bufferIdx++, cu.bvgMipFlag);
+            int            insertPos = -1;
+            updateCandList(mi, cost, rdModeList, candCostList, numModesForFullRD + 1, &insertPos);
+            updateCandList(mi, 0.8 * (double)minSadHad, hadModeList, candHadList, numHadCand);
+            sortedPelUnitBufs.insert(insertPos, rdModeList.size());
+          }
         }
 
         const double thresholdHadCost = 1.0 + 1.4 / sqrt((double)(cu.lwidth() * cu.lheight()));
         xReduceHadCandList(rdModeList, candCostList, sortedPelUnitBufs, numModesForFullRD, thresholdHadCost, mipHadCost,
-                           cu, fastMip);
+                           mipHadBvgFlag, cu, fastMip);
         cu.mipFlag    = false;
         cu.bvgMipFlag = false;
       }
@@ -966,7 +977,7 @@ void IntraSearch::setCuPredDataLuma(CodingUnit &cu, const ModeInfo &mi)
   CHECK(mi.plIdx != PlanarDirType::NO_DIR && mi.modeId != 0, "Error, directional index only for planar");
   cu.mipFlag                     = mi.mipFlg;
   cu.mipTransposedFlag           = mi.mipTrFlg;
-  cu.bvgMipFlag                  = cu.mipFlag && PU::bvgMipAvailable(cu);
+  cu.bvgMipFlag                  = mi.bvgMipFlg;
   cu.multiRefIdx                 = mi.mRefId;
   cu.intraDir[ChannelType::LUMA] = mi.modeId;
   cu.bdpcmMode[0]                = mi.bdpcm;
@@ -4722,8 +4733,8 @@ void IntraSearch::xSortRdModeListFirstColorSpace(ModeInfo mode, double cost, con
 template<typename T, size_t N>
 void IntraSearch::xReduceHadCandList(static_vector<T, N> &candModeList, static_vector<double, N> &candCostList,
                                      SortedPelUnitBufs &sortedPelBuffer, int &numModesForFullRD,
-                                     const double thresholdHadCost, const double *mipHadCost, const CodingUnit &cu,
-                                     const bool fastMip)
+                                     const double thresholdHadCost, const double *mipHadCost,
+                                     const bool *mipHadBvgFlag, const CodingUnit &cu, const bool fastMip)
 {
   const int                                        maxCandPerType = numModesForFullRD >> 1;
   static_vector<ModeInfo, FAST_UDI_MAX_RDMODE_NUM> tempRdModeList;
@@ -4775,7 +4786,7 @@ void IntraSearch::xReduceHadCandList(static_vector<T, N> &candModeList, static_v
     {
       const bool     isTransposed = (sortedMipModes[idx] >= transpOff ? true : false);
       const uint32_t mipIdx       = (isTransposed ? sortedMipModes[idx] - transpOff : sortedMipModes[idx]);
-      const ModeInfo mipMode(true, isTransposed, 0, mipIdx, -1);
+      const ModeInfo mipMode(true, isTransposed, 0, mipIdx, -1, mipHadBvgFlag[sortedMipModes[idx]]);
       bool           alreadyIncluded = false;
       for (int modeListIdx = 0; modeListIdx < modeListSize; modeListIdx++)
       {

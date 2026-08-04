@@ -4431,6 +4431,7 @@ void CABACWriter::mip_flag(const CodingUnit &cu)
 
 void CABACWriter::mip_pred_mode(const CodingUnit &cu)
 {
+  bvg_mip_flag(cu);
   m_binEncoder.encodeBinEP((cu.mipTransposedFlag ? 1 : 0));
 
   const int numModes = MatrixIntraPrediction::getNumModesMip(cu.Y());
@@ -4439,6 +4440,20 @@ void CABACWriter::mip_pred_mode(const CodingUnit &cu)
 
   DTRACE(g_trace_ctx, D_SYNTAX, "mip_pred_mode() pos=(%d,%d) mode=%d transposed=%d\n", cu.lumaPos().x, cu.lumaPos().y,
          cu.intraDir[ChannelType::LUMA], cu.mipTransposedFlag ? 1 : 0);
+}
+
+void CABACWriter::bvg_mip_flag(const CodingUnit &cu)
+{
+  const bool available = PU::bvgMipAvailable(cu);
+  CHECK(cu.bvgMipFlag && !available, "BVG-MIP is selected without a valid block-vector reference.");
+  if (!available)
+  {
+    return;
+  }
+
+  m_binEncoder.encodeBinEP(cu.bvgMipFlag ? 1 : 0);
+  DTRACE(g_trace_ctx, D_SYNTAX, "bvg_mip_flag() pos=(%d,%d) mode=%d\n", cu.lumaPos().x, cu.lumaPos().y,
+         cu.bvgMipFlag ? 1 : 0);
 }
 
 void CABACWriter::planarDir(const CodingUnit &cu)
