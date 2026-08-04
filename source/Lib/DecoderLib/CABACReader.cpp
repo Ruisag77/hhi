@@ -4752,12 +4752,6 @@ void CABACReader::mip_pred_mode(CodingUnit &cu)
 
 void CABACReader::bvg_mip_flag(CodingUnit &cu)
 {
-  cu.bvgMipFlag = false;
-  if (!PU::bvgMipAvailable(cu))
-  {
-    return;
-  }
-
   cu.bvgMipFlag = bool(m_binDecoder.decodeBinEP());
   DTRACE(g_trace_ctx, D_SYNTAX, "bvg_mip_flag() pos=(%d,%d) mode=%d\n", cu.lumaPos().x, cu.lumaPos().y,
          cu.bvgMipFlag ? 1 : 0);

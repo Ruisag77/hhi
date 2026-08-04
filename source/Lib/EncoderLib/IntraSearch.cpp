@@ -977,7 +977,7 @@ void IntraSearch::setCuPredDataLuma(CodingUnit &cu, const ModeInfo &mi)
   CHECK(mi.plIdx != PlanarDirType::NO_DIR && mi.modeId != 0, "Error, directional index only for planar");
   cu.mipFlag                     = mi.mipFlg;
   cu.mipTransposedFlag           = mi.mipTrFlg;
-  cu.bvgMipFlag                  = mi.bvgMipFlg;
+  cu.bvgMipFlag                  = mi.bvgMipFlg && PU::bvgMipAvailable(cu);
   cu.multiRefIdx                 = mi.mRefId;
   cu.intraDir[ChannelType::LUMA] = mi.modeId;
   cu.bdpcmMode[0]                = mi.bdpcm;
@@ -1252,10 +1252,12 @@ void IntraSearch::xSelectMTCandLuma(CodingStructure &cs, Partitioner &pt, IModeT
   {
     //--- add intra mode entry ---
     auto             &modeTrCand = modeTrCandList[pid];
-    const bool        hasBuf     = sortedBufs && modeTrCand.bdpcm == BdpcmMode::NONE;
+    setCuPredDataLuma(*tu.cu, modeTrCand);
+    const bool bvgStateChanged = modeTrCand.bvgMipFlg && !tu.cu->bvgMipFlag;
+    modeTrCand.bvgMipFlg = tu.cu->bvgMipFlag;
+    const bool hasBuf = sortedBufs && modeTrCand.bdpcm == BdpcmMode::NONE && !bvgStateChanged;
     const PelUnitBuf *unitBuf    = hasBuf ? sortedBufs->getBufFromSortedList(modeTrCand.bufferIdx) : nullptr;
     const PelBuf     *prdBuf     = unitBuf ? &unitBuf->Y() : nullptr;
-    setCuPredDataLuma(*tu.cu, modeTrCand);
     xPreCalcPrdTransLuma(tu, modeTrCand, prdBuf);
   }
 

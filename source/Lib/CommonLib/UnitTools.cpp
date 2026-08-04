@@ -1055,7 +1055,6 @@ static bool isBvgMipBvValid(const CodingUnit &cu, const Mv &bv)
   const int width  = cu.lwidth();
   const int height = cu.lheight();
   const CPelBuf reco = cu.cs->picture->getRecoBuf(COMP_Y);
-  const CodingStructure &pictureCs = *cu.cs->picture->m_cs;
 
   // The remote block and its external top/left boundaries are both used by BVG-MIP.
   if (refX <= 0 || refY <= 0 || refX + width > reco.width || refY + height > reco.height)
@@ -1076,9 +1075,8 @@ static bool isBvgMipBvValid(const CodingUnit &cu, const Mv &bv)
 
   for (const Position &pos: checkPos)
   {
-    if (!pictureCs.isDecomp(pos, ChannelType::LUMA) ||
-        pictureCs.getCURestricted(pos, cu.lumaPos(), cu.slice->m_independentSliceIdx, cu.tileIdx,
-                                  ChannelType::LUMA) == nullptr)
+    if (!cu.cs->isDecomp(pos, ChannelType::LUMA) ||
+        cu.cs->getCURestricted(pos, cu, ChannelType::LUMA) == nullptr)
     {
       return false;
     }
@@ -1097,7 +1095,6 @@ void PU::getBvgMipCands(const CodingUnit &cu, static_vector<Mv, NUM_BVG_MIP_CAND
   const Position posLT = cu.Y().topLeft();
   const Position posRT = cu.Y().topRight();
   const Position posLB = cu.Y().bottomLeft();
-  const CodingStructure &pictureCs = *cu.cs->picture->m_cs;
   const Position neighborPos[NUM_BVG_MIP_CANDS] = {
     posLT.offset(-1, -1),
     posLB.offset(-1, 0),
@@ -1108,13 +1105,12 @@ void PU::getBvgMipCands(const CodingUnit &cu, static_vector<Mv, NUM_BVG_MIP_CAND
 
   for (const Position &pos: neighborPos)
   {
-    if (!pictureCs.isDecomp(pos, ChannelType::LUMA))
+    if (!cu.cs->isDecomp(pos, ChannelType::LUMA))
     {
       continue;
     }
 
-    const CodingUnit *neighbor =
-      pictureCs.getCURestricted(pos, cu.lumaPos(), cu.slice->m_independentSliceIdx, cu.tileIdx, ChannelType::LUMA);
+    const CodingUnit *neighbor = cu.cs->getCURestricted(pos, cu, ChannelType::LUMA);
     if (neighbor == nullptr || !CU::isIBC(*neighbor) || !isBvgMipBvValid(cu, neighbor->bv))
     {
       continue;

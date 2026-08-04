@@ -4444,13 +4444,6 @@ void CABACWriter::mip_pred_mode(const CodingUnit &cu)
 
 void CABACWriter::bvg_mip_flag(const CodingUnit &cu)
 {
-  const bool available = PU::bvgMipAvailable(cu);
-  CHECK(cu.bvgMipFlag && !available, "BVG-MIP is selected without a valid block-vector reference.");
-  if (!available)
-  {
-    return;
-  }
-
   m_binEncoder.encodeBinEP(cu.bvgMipFlag ? 1 : 0);
   DTRACE(g_trace_ctx, D_SYNTAX, "bvg_mip_flag() pos=(%d,%d) mode=%d\n", cu.lumaPos().x, cu.lumaPos().y,
          cu.bvgMipFlag ? 1 : 0);
