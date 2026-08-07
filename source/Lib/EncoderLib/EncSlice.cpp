@@ -44,7 +44,45 @@
 #include "CommonLib/dtrace_blockstatistics.h"
 #endif
 
+#include <cctype>
+#include <filesystem>
+#include <fstream>
 #include <math.h>
+#include <system_error>
+
+namespace
+{
+std::string sanitizeTimdStatsPathComponent(const std::string &value)
+{
+  std::string sanitized;
+  sanitized.reserve(value.size());
+  for (const unsigned char ch: value)
+  {
+    sanitized.push_back(std::isalnum(ch) || ch == '.' || ch == '-' || ch == '_' ? char(ch) : '_');
+  }
+  return sanitized.empty() ? "unknown" : sanitized;
+}
+
+std::string escapeTimdStatsCsv(const std::string &value)
+{
+  if (value.find_first_of(",\"\r\n") == std::string::npos)
+  {
+    return value;
+  }
+
+  std::string escaped = "\"";
+  for (const char ch: value)
+  {
+    escaped += ch;
+    if (ch == '"')
+    {
+      escaped += '"';
+    }
+  }
+  escaped += '"';
+  return escaped;
+}
+}   // namespace
 
 //! \ingroup EncoderLib
 //! \{
@@ -76,6 +114,8 @@ void EncSlice::create(int width, int height, ChromaFormat chromaFormat, uint32_t
 
 void EncSlice::destroy()
 {
+  xWriteTimdUsageStats();
+
   // free lambda and QP arrays
   m_vdRdPicLambda.clear();
   m_vdRdPicQp.clear();
@@ -102,6 +142,227 @@ void EncSlice::init(EncLib *pcEncLib, const SPS &sps)
   m_vdRdPicQp.resize(m_encCfg->m_uiDeltaQpRD * 2 + 1);
   m_viRdPicQp.resize(m_encCfg->m_uiDeltaQpRD * 2 + 1);
   m_pcRateCtrl = pcEncLib->getRateCtrl();
+
+  xPrepareTimdUsageStats();
+}
+
+void EncSlice::xPrepareTimdUsageStats()
+{
+  namespace fs = std::filesystem;
+
+  m_timdUsageByPoc.clear();
+  m_timdUsageSequence.clear();
+  m_timdUsageShardName.clear();
+  m_timdUsageShardPath.clear();
+  m_timdUsageStatsPrepared = false;
+  m_timdUsageStatsWritten  = false;
+
+  if (!m_encCfg || !m_encCfg->m_timdUsageStats)
+  {
+    return;
+  }
+
+  const fs::path bitstreamPath(m_encCfg->m_bitstreamFileName);
+  const std::string parentName = bitstreamPath.parent_path().filename().string();
+  const std::string rasMarker  = "_RAS_Result_qp";
+  const size_t      markerPos  = parentName.find(rasMarker);
+  if (markerPos != std::string::npos && markerPos > 0)
+  {
+    m_timdUsageSequence = parentName.substr(0, markerPos);
+  }
+  else
+  {
+    std::string inputStem = fs::path(m_encCfg->m_inputFileName).stem().string();
+    const size_t separator = inputStem.find('_');
+    m_timdUsageSequence = inputStem.substr(0, separator);
+  }
+  m_timdUsageSequence = sanitizeTimdStatsPathComponent(m_timdUsageSequence);
+
+  m_timdUsageShardName = sanitizeTimdStatsPathComponent(bitstreamPath.stem().string());
+  if (m_pcLib->getLayerId() > 0)
+  {
+    m_timdUsageShardName += "_layer" + std::to_string(m_pcLib->getLayerId());
+  }
+
+  const fs::path statsRoot = m_encCfg->m_timdUsageStatsRoot.empty() ? fs::path("timd_usage_stats")
+                                                                    : fs::path(m_encCfg->m_timdUsageStatsRoot);
+  const fs::path shardDir = statsRoot / ".shards" / m_timdUsageSequence /
+    ("QP" + std::to_string(m_encCfg->m_iQP));
+
+  std::error_code error;
+  fs::create_directories(shardDir, error);
+  if (error)
+  {
+    msg(WARNING, "Warning: cannot create TIMD usage statistics directory '%s': %s\n", shardDir.string().c_str(),
+        error.message().c_str());
+    return;
+  }
+
+  const fs::path shardPath = shardDir / (m_timdUsageShardName + ".csv");
+  const fs::path tempPath  = fs::path(shardPath.string() + ".tmp");
+  fs::remove(shardPath, error);
+  error.clear();
+  fs::remove(tempPath, error);
+  m_timdUsageShardPath     = shardPath.string();
+  m_timdUsageStatsPrepared = true;
+}
+
+void EncSlice::xAccumulateTimdUsageStats(const CodingStructure &cs, const UnitArea &ctuArea, const int poc)
+{
+  if (!m_timdUsageStatsPrepared)
+  {
+    return;
+  }
+
+  TimdUsageRecord &record = m_timdUsageByPoc[poc];
+  record.ctus++;
+
+  for (const CodingUnit &cu: cs.traverseCUs(ctuArea, ChannelType::LUMA))
+  {
+    if (!cu.Y().valid() || !isLuma(cu.chType))
+    {
+      continue;
+    }
+
+    const uint64_t area = cu.lumaSize().area();
+    record.lumaCus++;
+    record.lumaSamples += area;
+
+    if (cu.predMode == MODE_INTRA)
+    {
+      record.intraPredLumaCus++;
+      record.intraPredLumaSamples += area;
+    }
+
+    if (!cu.timdFlag)
+    {
+      continue;
+    }
+
+    record.timdTotal++;
+    record.timdSamples += area;
+    if (cu.timdSadFlag && cu.timdMergeFlag)
+    {
+      record.timdInvalid++;
+      record.timdInvalidSamples += area;
+    }
+    else if (cu.timdMergeFlag)
+    {
+      record.timdMerge++;
+      record.timdMergeSamples += area;
+    }
+    else if (cu.timdSadFlag)
+    {
+      record.timdSad++;
+      record.timdSadSamples += area;
+    }
+    else
+    {
+      record.timdNormal++;
+      record.timdNormalSamples += area;
+    }
+
+    const bool mergeAvailable = cu.cs->sps->m_useTIMDMerge && CU::allowTimdMerge(cu);
+    if (mergeAvailable)
+    {
+      record.timdMergeAvailable++;
+      record.timdMergeAvailableSamples += area;
+      if (!cu.timdMergeFlag)
+      {
+        record.timdMergeNotSelected++;
+        record.timdMergeNotSelectedSamples += area;
+      }
+    }
+
+    // This condition deliberately mirrors CABACWriter::timd_merge_flag(). It counts only bins that are present in the
+    // final bitstream, not merge candidates that lost to TIMDSAD or to a non-TIMD mode.
+    const bool mergeFlagCoded = mergeAvailable && !cu.timdSadFlag;
+    if (mergeFlagCoded)
+    {
+      record.timdMergeFlagCoded++;
+      record.timdMergeFlagCodedSamples += area;
+      if (cu.timdMergeFlag)
+      {
+        record.timdMergeFlagOne++;
+        record.timdMergeFlagOneSamples += area;
+      }
+      else
+      {
+        record.timdMergeFlagZero++;
+        record.timdMergeFlagZeroSamples += area;
+      }
+    }
+  }
+}
+
+void EncSlice::xWriteTimdUsageStats()
+{
+  namespace fs = std::filesystem;
+
+  if (m_timdUsageStatsWritten)
+  {
+    return;
+  }
+  m_timdUsageStatsWritten = true;
+  if (!m_timdUsageStatsPrepared || !m_encCfg)
+  {
+    return;
+  }
+
+  const fs::path shardPath(m_timdUsageShardPath);
+  const fs::path tempPath(shardPath.string() + ".tmp");
+  std::ofstream  output(tempPath, std::ios::out | std::ios::trunc);
+  if (!output)
+  {
+    msg(WARNING, "Warning: cannot open TIMD usage statistics file '%s'\n", tempPath.string().c_str());
+    return;
+  }
+
+  output << "schema_version,sequence,qp,layer_id,shard,bitstream,frame_skip,frames_to_encode,poc,source_frame,"
+            "slices,ctus,luma_cus,intra_pred_luma_cus,timd_total,timd_normal,timdsad,timd_merge,timd_invalid,"
+            "timd_merge_available,timd_merge_not_selected,timd_merge_flag_coded,timd_merge_flag_zero,"
+            "timd_merge_flag_one,"
+            "luma_samples,intra_pred_luma_samples,timd_samples,timd_normal_samples,timdsad_samples,"
+            "timd_merge_samples,timd_invalid_samples,timd_merge_available_samples,"
+            "timd_merge_not_selected_samples,timd_merge_flag_coded_samples,timd_merge_flag_zero_samples,"
+            "timd_merge_flag_one_samples\n";
+
+  for (const auto &[poc, record]: m_timdUsageByPoc)
+  {
+    const int64_t sourceFrame = m_encCfg->m_fieldSeqFlag
+      ? int64_t(m_encCfg->m_frameSkip) * 2 + int64_t(poc) * m_encCfg->m_temporalSubsampleRatio
+      : int64_t(m_encCfg->m_frameSkip) + int64_t(poc) * m_encCfg->m_temporalSubsampleRatio;
+
+    output << 2 << ',' << escapeTimdStatsCsv(m_timdUsageSequence) << ',' << m_encCfg->m_iQP << ','
+           << m_pcLib->getLayerId() << ',' << escapeTimdStatsCsv(m_timdUsageShardName) << ','
+           << escapeTimdStatsCsv(m_encCfg->m_bitstreamFileName) << ',' << m_encCfg->m_frameSkip << ','
+           << m_encCfg->m_framesToBeEncoded << ',' << poc << ',' << sourceFrame << ',' << record.slices << ','
+           << record.ctus << ',' << record.lumaCus << ',' << record.intraPredLumaCus << ',' << record.timdTotal << ','
+           << record.timdNormal << ',' << record.timdSad << ',' << record.timdMerge << ',' << record.timdInvalid << ','
+           << record.timdMergeAvailable << ',' << record.timdMergeNotSelected << ',' << record.timdMergeFlagCoded << ','
+           << record.timdMergeFlagZero << ',' << record.timdMergeFlagOne << ','
+           << record.lumaSamples << ',' << record.intraPredLumaSamples << ',' << record.timdSamples << ','
+           << record.timdNormalSamples << ',' << record.timdSadSamples << ',' << record.timdMergeSamples << ','
+           << record.timdInvalidSamples << ',' << record.timdMergeAvailableSamples << ','
+           << record.timdMergeNotSelectedSamples << ',' << record.timdMergeFlagCodedSamples << ','
+           << record.timdMergeFlagZeroSamples << ',' << record.timdMergeFlagOneSamples << '\n';
+  }
+  output.close();
+  if (!output)
+  {
+    msg(WARNING, "Warning: failed while writing TIMD usage statistics file '%s'\n", tempPath.string().c_str());
+    return;
+  }
+
+  std::error_code error;
+  fs::remove(shardPath, error);
+  error.clear();
+  fs::rename(tempPath, shardPath, error);
+  if (error)
+  {
+    msg(WARNING, "Warning: cannot finalize TIMD usage statistics file '%s': %s\n", shardPath.string().c_str(),
+        error.message().c_str());
+  }
 }
 
 void EncSlice::setUpLambda(Slice *slice, const double dLambda, int qp)
@@ -2022,6 +2283,11 @@ void EncSlice::encodeSlice(Picture *pic, OutputBitstream *pcSubstreams, uint32_t
   const uint32_t       widthInCtus = pcv.widthInCtus;
   uint32_t             uiSubStrm   = 0;
 
+  if (m_timdUsageStatsPrepared)
+  {
+    m_timdUsageByPoc[pic->m_poc].slices++;
+  }
+
   static Ctx storedCtx;
   // for every CTU in the slice...
   for (uint32_t ctuIdx = 0; ctuIdx < pcSlice->getNumCtuInSlice(); ctuIdx++)
@@ -2094,6 +2360,7 @@ void EncSlice::encodeSlice(Picture *pic, OutputBitstream *pcSubstreams, uint32_t
       getBinVector(ctuXPosInCtus));   // clear the bin counters and prepare for collecting new data for this CTU
     m_CABACWriter->coding_tree_unit(cs, ctuArea, pic->m_prevQP, ctuRsAddr);
     m_CABACWriter->setBinBuffer(nullptr);   // done with data collection for this CTU
+    xAccumulateTimdUsageStats(cs, ctuArea, pic->m_poc);
 
     if (storeContexts(pcSlice, ctuXPosInCtus, ctuYPosInCtus))   // store CABAC context to be used in next frames
     {

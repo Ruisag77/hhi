@@ -730,6 +730,8 @@ bool EncAppCfg::parseCfg(int argc, char *argv[], EncCfg *encCfg)
   ("InputPathPrefix,-ipp",                            inputPathPrefix,                                  "pathname to prepend to input filename")
   ("BitstreamFile,b",                                 encCfg->m_bitstreamFileName,                      "Bitstream output file name")
   ("ReconFile,o",                                     encCfg->m_reconFileName,                          "Reconstructed YUV output file name")
+  ("TimdUsageStats",                                  encCfg->m_timdUsageStats,                         "Write final post-RDO TIMD/TIMDSAD/TIMD-Merge usage statistics")
+  ("TimdUsageStatsRoot",                              encCfg->m_timdUsageStatsRoot,                     "Root directory for parallel-safe TIMD usage statistic shards")
 #if JVET_Z0120_SII_SEI_PROCESSING
   ("SEIShutterIntervalPreFilename,-sii",              encCfg->m_seiCfg.m_shutterIntervalPreFileName,    "File name of Pre-Filtering video. If empty, not output video\n")
 #endif
@@ -5511,6 +5513,8 @@ void EncAppCfg::xPrintParameter(EncCfg *encCfg)
   msg(DETAILS, "Input          File                    : %s\n", encCfg->m_inputFileName.c_str());
   msg(DETAILS, "Bitstream      File                    : %s\n", encCfg->m_bitstreamFileName.c_str());
   msg(DETAILS, "Reconstruction File                    : %s\n", encCfg->m_reconFileName.c_str());
+  msg(DETAILS, "TIMD usage statistics                  : %s\n",
+      encCfg->m_timdUsageStats ? encCfg->m_timdUsageStatsRoot.c_str() : "Disabled");
 #if JVET_Z0120_SII_SEI_PROCESSING
   if (encCfg->m_seiCfg.m_ShutterFilterEnable && !encCfg->m_seiCfg.m_shutterIntervalPreFileName.empty())
   {

@@ -538,6 +538,8 @@ struct EncCfg
   std::string m_inputFileName { "" };   // source file name
   std::string m_bitstreamFileName { "" };   // output bitstream file
   std::string m_reconFileName { "" };   // output reconstruction file
+  bool        m_timdUsageStats { true };   // write final, post-RDO TIMD-family usage statistics
+  std::string m_timdUsageStatsRoot { "timd_usage_stats" };   // root directory for per-process statistic shards
 
   int      m_frameRate { 0 };
   int      m_frameSkip { 0 };

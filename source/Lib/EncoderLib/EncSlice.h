@@ -46,11 +46,44 @@
 #include "CommonLib/CommonDef.h"
 #include "CommonLib/Picture.h"
 
+#include <map>
+#include <string>
+
 //! \ingroup EncoderLib
 //! \{
 
 class EncLib;
 class EncGOP;
+
+struct TimdUsageRecord
+{
+  uint64_t slices { 0 };
+  uint64_t ctus { 0 };
+  uint64_t lumaCus { 0 };
+  uint64_t intraPredLumaCus { 0 };
+  uint64_t timdTotal { 0 };
+  uint64_t timdNormal { 0 };
+  uint64_t timdSad { 0 };
+  uint64_t timdMerge { 0 };
+  uint64_t timdInvalid { 0 };
+  uint64_t timdMergeAvailable { 0 };
+  uint64_t timdMergeNotSelected { 0 };
+  uint64_t timdMergeFlagCoded { 0 };
+  uint64_t timdMergeFlagZero { 0 };
+  uint64_t timdMergeFlagOne { 0 };
+  uint64_t lumaSamples { 0 };
+  uint64_t intraPredLumaSamples { 0 };
+  uint64_t timdSamples { 0 };
+  uint64_t timdNormalSamples { 0 };
+  uint64_t timdSadSamples { 0 };
+  uint64_t timdMergeSamples { 0 };
+  uint64_t timdInvalidSamples { 0 };
+  uint64_t timdMergeAvailableSamples { 0 };
+  uint64_t timdMergeNotSelectedSamples { 0 };
+  uint64_t timdMergeFlagCodedSamples { 0 };
+  uint64_t timdMergeFlagZeroSamples { 0 };
+  uint64_t timdMergeFlagOneSamples { 0 };
+};
 
 // ====================================================================================================================
 // Class definition
@@ -97,6 +130,13 @@ private:
   int m_gopID;
 #endif
   std::vector<BinStoreVector> m_binVectors;
+
+  std::map<int, TimdUsageRecord> m_timdUsageByPoc;
+  std::string                    m_timdUsageSequence;
+  std::string                    m_timdUsageShardName;
+  std::string                    m_timdUsageShardPath;
+  bool                           m_timdUsageStatsPrepared { false };
+  bool                           m_timdUsageStatsWritten { false };
 
 public:
   double initializeLambda(const Slice *slice, const int gopId, const int refQP,
@@ -149,6 +189,9 @@ public:
   CABACDataStore *getCABACDataStore() { return m_CABACWriter->m_CABACDataStore; }
 
 private:
+  void xPrepareTimdUsageStats();
+  void xAccumulateTimdUsageStats(const CodingStructure &cs, const UnitArea &ctuArea, int poc);
+  void xWriteTimdUsageStats();
   double xGetQPValueAccordingToLambda(double lambda);
   void   xSetUseLICOnPicLevel(Slice *slice, bool fastMode);
 };
