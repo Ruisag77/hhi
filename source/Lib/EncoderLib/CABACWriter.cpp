@@ -1259,8 +1259,7 @@ void CABACWriter::intra_luma_pred_mode(const CodingUnit &cu, const CUCtxIntra &c
   timd_flag(cu);
   if (cu.timdFlag)
   {
-    timd_sad_flag(cu);
-    timd_merge_flag(cu);
+    timd_alt_flag(cu);
     return;
   }
   eip_flag(cu);
@@ -4488,23 +4487,53 @@ void CABACWriter::timd_flag(const CodingUnit &cu)
          cu.lumaSize().width, cu.lumaSize().height, cu.timdFlag);
 }
 
-void CABACWriter::timd_sad_flag(const CodingUnit &cu)
+void CABACWriter::timd_alt_flag(const CodingUnit &cu)
 {
-  if (!cu.Y().valid() || !cu.cs->sps->m_useTIMD || !cu.cs->sps->m_useTIMDSAD || !cu.timdFlag || !CU::allowTimdSad(cu))
+  if (!cu.Y().valid() || !cu.cs->sps->m_useTIMD || !cu.timdFlag)
   {
     return;
   }
 
-  m_binEncoder.encodeBin(cu.timdSadFlag, Ctx::TimdSadFlag());
+  const bool sadAllowed   = cu.cs->sps->m_useTIMDSAD && CU::allowTimdSad(cu);
+  const bool mergeAllowed = cu.cs->sps->m_useTIMDMerge && CU::allowTimdMerge(cu);
+
+  CHECK(cu.timdSadFlag && cu.timdMergeFlag, "TIMDSAD and TIMD-Merge cannot both be selected");
+  CHECK(cu.timdSadFlag && !sadAllowed, "TIMDSAD selected when it is not available");
+  CHECK(cu.timdMergeFlag && !mergeAllowed, "TIMD-Merge selected when it is not available");
+
+  if (sadAllowed && mergeAllowed)
+  {
+    // Ordinary TIMD gets the shortest branch. Only alternative TIMD modes need the second selector.
+    const bool timdAltFlag = cu.timdSadFlag || cu.timdMergeFlag;
+    m_binEncoder.encodeBin(timdAltFlag, Ctx::TimdAltFlag());
+    DTRACE(g_trace_ctx, D_SYNTAX, "timd_alt_flag() pos=(%d,%d) size=(%d,%d) mode=%d\n", cu.lumaPos().x,
+           cu.lumaPos().y, cu.lumaSize().width, cu.lumaSize().height, timdAltFlag);
+
+    if (timdAltFlag)
+    {
+      timd_merge_flag(cu);
+    }
+    return;
+  }
+
+  if (sadAllowed)
+  {
+    m_binEncoder.encodeBin(cu.timdSadFlag, Ctx::TimdAltFlag());
+    DTRACE(g_trace_ctx, D_SYNTAX, "timd_alt_flag() pos=(%d,%d) size=(%d,%d) mode=%d\n", cu.lumaPos().x,
+           cu.lumaPos().y, cu.lumaSize().width, cu.lumaSize().height, cu.timdSadFlag);
+    return;
+  }
+
+  if (mergeAllowed)
+  {
+    timd_merge_flag(cu);
+  }
 }
 
 void CABACWriter::timd_merge_flag(const CodingUnit &cu)
 {
-  if (!cu.Y().valid() || !cu.cs->sps->m_useTIMDMerge || !cu.timdFlag || cu.timdSadFlag ||
-      !CU::allowTimdMerge(cu))
-  {
-    return;
-  }
+  CHECK(!cu.Y().valid() || !cu.cs->sps->m_useTIMDMerge || !cu.timdFlag,
+        "TIMD-Merge selector coded outside the TIMD-Merge syntax path");
 
   const unsigned ctxId = cu.lumaSize().area() >= 64 ? 0 : 1;
   m_binEncoder.encodeBin(cu.timdMergeFlag, Ctx::TimdMergeFlag(ctxId));

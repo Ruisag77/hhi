@@ -699,7 +699,7 @@ const CtxSet ContextSetCfg::TimdFlag = ContextSetCfg::addCtxSet
 });
 
 
-const CtxSet ContextSetCfg::TimdSadFlag = ContextSetCfg::addCtxSet
+const CtxSet ContextSetCfg::TimdAltFlag = ContextSetCfg::addCtxSet
 ({
     {  41 },
     {  34 },
