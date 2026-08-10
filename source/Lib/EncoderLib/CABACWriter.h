@@ -149,7 +149,7 @@ public:
   void dimd_flag(const CodingUnit &cu);
   void dimdChromaFlag(const CodingUnit &cu);
   void timd_flag(const CodingUnit &cu);
-  void timd_alt_flag(const CodingUnit &cu);
+  void timd_sad_flag(const CodingUnit &cu);
   void timd_merge_flag(const CodingUnit &cu);
   void obic_flag(const CodingUnit &cu);
   void eip_flag(const CodingUnit &cu);

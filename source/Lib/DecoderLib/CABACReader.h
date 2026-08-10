@@ -133,7 +133,7 @@ public:
   void dimd_flag(CodingUnit &cu);
   void dimdChromaFlag(CodingUnit &cu);
   void timd_flag(CodingUnit &cu);
-  void timd_alt_flag(CodingUnit &cu);
+  void timd_sad_flag(CodingUnit &cu);
   void timd_merge_flag(CodingUnit &cu);
   void obic_flag(CodingUnit &cu);
   void eip_flag(CodingUnit &cu);

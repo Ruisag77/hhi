@@ -1802,7 +1802,8 @@ void CABACReader::intra_luma_pred_mode(CodingUnit &cu)
   timd_flag(cu);
   if (cu.timdFlag)
   {
-    timd_alt_flag(cu);
+    timd_sad_flag(cu);
+    timd_merge_flag(cu);
     return;
   }
   eip_flag(cu);
@@ -4800,46 +4801,24 @@ void CABACReader::timd_flag(CodingUnit &cu)
          cu.lumaSize().width, cu.lumaSize().height, cu.timdFlag);
 }
 
-void CABACReader::timd_alt_flag(CodingUnit &cu)
+void CABACReader::timd_sad_flag(CodingUnit &cu)
 {
-  RExt__DECODER_DEBUG_BIT_STATISTICS_CREATE_SET_SIZE(STATS__CABAC_BITS__TIMD_ALT_FLAG, cu.lumaSize());
+  RExt__DECODER_DEBUG_BIT_STATISTICS_CREATE_SET_SIZE(STATS__CABAC_BITS__TIMDSAD_FLAG, cu.lumaSize());
 
-  cu.timdSadFlag   = false;
-  cu.timdMergeFlag = false;
-
-  if (!cu.Y().valid() || !cu.cs->sps->m_useTIMD || !cu.timdFlag)
+  if (!cu.Y().valid() || !cu.cs->sps->m_useTIMD || !cu.cs->sps->m_useTIMDSAD)
   {
+    CHECK(!cu.timdFlag, "Error, timd SAD supported only for luma and when TIMD and TIMDSAD is enabled in sps");
     return;
   }
 
-  const bool sadAllowed   = cu.cs->sps->m_useTIMDSAD && CU::allowTimdSad(cu);
-  const bool mergeAllowed = cu.cs->sps->m_useTIMDMerge && CU::allowTimdMerge(cu);
+  CHECK(!cu.timdFlag, "Error, timd must be aneabled for timdSAD");
 
-  if (sadAllowed && mergeAllowed)
+  cu.timdSadFlag = false;
+  if (cu.timdFlag && CU::allowTimdSad(cu))
   {
-    const bool timdAltFlag = m_binDecoder.decodeBin(Ctx::TimdAltFlag());
-    DTRACE(g_trace_ctx, D_SYNTAX, "timd_alt_flag() pos=(%d,%d) size=(%d,%d) mode=%d\n", cu.lumaPos().x,
-           cu.lumaPos().y, cu.lumaSize().width, cu.lumaSize().height, timdAltFlag);
-
-    if (timdAltFlag)
-    {
-      timd_merge_flag(cu);
-      cu.timdSadFlag = !cu.timdMergeFlag;
-    }
-    return;
-  }
-
-  if (sadAllowed)
-  {
-    cu.timdSadFlag = m_binDecoder.decodeBin(Ctx::TimdAltFlag());
-    DTRACE(g_trace_ctx, D_SYNTAX, "timd_alt_flag() pos=(%d,%d) size=(%d,%d) mode=%d\n", cu.lumaPos().x,
-           cu.lumaPos().y, cu.lumaSize().width, cu.lumaSize().height, cu.timdSadFlag);
-    return;
-  }
-
-  if (mergeAllowed)
-  {
-    timd_merge_flag(cu);
+    cu.timdSadFlag = m_binDecoder.decodeBin(Ctx::TimdSadFlag());
+    DTRACE(g_trace_ctx, D_SYNTAX, "timd_sad_flag() pos=(%d,%d) size=(%d,%d) mode=%d\n", cu.lumaPos().x, cu.lumaPos().y,
+           cu.lumaSize().width, cu.lumaSize().height, cu.timdSadFlag);
   }
 }
 
@@ -4847,8 +4826,12 @@ void CABACReader::timd_merge_flag(CodingUnit &cu)
 {
   RExt__DECODER_DEBUG_BIT_STATISTICS_CREATE_SET_SIZE(STATS__CABAC_BITS__TIMD_MERGE_FLAG, cu.lumaSize());
 
-  CHECK(!cu.Y().valid() || !cu.cs->sps->m_useTIMDMerge || !cu.timdFlag,
-        "TIMD-Merge selector decoded outside the TIMD-Merge syntax path");
+  cu.timdMergeFlag = false;
+  if (!cu.Y().valid() || !cu.cs->sps->m_useTIMDMerge || !cu.timdFlag || cu.timdSadFlag ||
+      !CU::allowTimdMerge(cu))
+  {
+    return;
+  }
 
   const unsigned ctxId = cu.lumaSize().area() >= 64 ? 0 : 1;
   cu.timdMergeFlag = m_binDecoder.decodeBin(Ctx::TimdMergeFlag(ctxId));
