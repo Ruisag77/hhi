@@ -4474,7 +4474,7 @@ bool IntraPrediction::deriveTimdMergeMode(const CPelBuf &recoBuf, const CompArea
   }
 
   const auto cuArea = cu.lwidth() * cu.lheight();
-  if (cuArea <= 16 || (cu.slice->isIntra() && cuArea > 1024))
+  if (cuArea <= 16 || cuArea > TIMD_MERGE_MAX_CU_AREA)
   {
     return false;
   }
