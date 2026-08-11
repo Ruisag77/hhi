@@ -958,17 +958,6 @@ void TrQuant::getTrTypes(const TransformUnit &tu, const CompID compID, TransType
     return;
   }
 
-  if (isImplicitMTS && isLuma(compID) && tu.cu->timdFlag && tu.cu->timdMergeFlag)
-  {
-    const int  width             = tu.blocks[compID].width;
-    const int  height            = tu.blocks[compID].height;
-    const bool canInheritHorType = CS::isDualITree(*tu.cs) && width >= 4 && width <= 16;
-    const bool canInheritVerType = CS::isDualITree(*tu.cs) && height >= 4 && height <= 16;
-    trTypeHor                    = canInheritHorType ? tu.cu->timdMergeTrType[0] : TransType::DCT2;
-    trTypeVer                    = canInheritVerType ? tu.cu->timdMergeTrType[1] : TransType::DCT2;
-    return;
-  }
-
   if (isImplicitMTS)
   {
     const int width  = tu.blocks[compID].width;

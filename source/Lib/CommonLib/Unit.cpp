@@ -300,8 +300,6 @@ CodingUnit &CodingUnit::operator=(const CodingUnit &other)
   timdMergeFlag      = other.timdMergeFlag;
   timdMergeAvailable = other.timdMergeAvailable;
   timdMergeData      = other.timdMergeData;
-  timdMergeTrType[0] = other.timdMergeTrType[0];
-  timdMergeTrType[1] = other.timdMergeTrType[1];
   obicAvailFlag    = other.obicAvailFlag;
   obicFlag         = other.obicFlag;
   obicData         = other.obicData;
@@ -453,8 +451,6 @@ void CodingUnit::initCuData()
   timdMergeFlag      = false;
   timdMergeAvailable = false;
   timdMergeData      = {};
-  timdMergeTrType[0] = TransType::DCT2;
-  timdMergeTrType[1] = TransType::DCT2;
   obicAvailFlag  = false;
   obicFlag       = false;
   obicData       = {};

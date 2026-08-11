@@ -40,7 +40,6 @@
 #include "Unit.h"
 #include "UnitTools.h"
 #include "Buffer.h"
-#include "TrQuant.h"
 
 #include "dtrace_next.h"
 #include "dtrace_buffer.h"
@@ -4464,8 +4463,6 @@ bool IntraPrediction::deriveTimdMergeMode(const CPelBuf &recoBuf, const CompArea
   cu.timdMergeData.isBlend      = false;
   cu.timdMergeData.blendMode[0] = PLANAR_IDX;
   cu.timdMergeData.relWeight[0] = 1 << 6;
-  cu.timdMergeTrType[0]         = TransType::DCT2;
-  cu.timdMergeTrType[1]         = TransType::DCT2;
 
   if (!cu.cs->sps->m_useTIMD || !cu.cs->sps->m_useTIMDMerge || !cu.Y().valid() || cu.predMode != MODE_INTRA ||
       !isLuma(cu.chType) || cu.bdpcmMode[0] != BdpcmMode::NONE)
@@ -4487,14 +4484,13 @@ bool IntraPrediction::deriveTimdMergeMode(const CPelBuf &recoBuf, const CompArea
 
   struct TimdMergeCandidate
   {
-    TimdData  data {};
-    TransType trType[2] { TransType::DCT2, TransType::DCT2 };
+    TimdData data {};
   };
 
   const auto validMode = [](const int mode) { return mode >= PLANAR_IDX && mode <= EXT_VDIA_IDX; };
   const auto sameCandidate = [](const TimdMergeCandidate &a, const TimdMergeCandidate &b)
   {
-    if (a.data.isBlend != b.data.isBlend || a.trType[0] != b.trType[0] || a.trType[1] != b.trType[1])
+    if (a.data.isBlend != b.data.isBlend)
     {
       return false;
     }
@@ -4526,11 +4522,6 @@ bool IntraPrediction::deriveTimdMergeMode(const CPelBuf &recoBuf, const CompArea
       continue;
     }
 
-    if (CS::isDualITree(*cu.cs) && neighbour->firstTU)
-    {
-      TrQuant::getTrTypes(*neighbour->firstTU, COMP_Y, candidate.trType[0], candidate.trType[1]);
-    }
-
     if (std::find_if(candidates.begin(), candidates.end(), [&candidate, &sameCandidate](const TimdMergeCandidate &c)
         { return sameCandidate(candidate, c); }) == candidates.end())
     {
@@ -4546,9 +4537,7 @@ bool IntraPrediction::deriveTimdMergeMode(const CPelBuf &recoBuf, const CompArea
   cu.timdMergeAvailable = true;
   if (candidates.size() == 1)
   {
-    cu.timdMergeData      = candidates.front().data;
-    cu.timdMergeTrType[0] = candidates.front().trType[0];
-    cu.timdMergeTrType[1] = candidates.front().trType[1];
+    cu.timdMergeData = candidates.front().data;
     return true;
   }
 
@@ -4558,9 +4547,7 @@ bool IntraPrediction::deriveTimdMergeMode(const CPelBuf &recoBuf, const CompArea
   const auto templateType = templateInfo.eTemplateType;
   if (templateType == NO_NEIGHBOR)
   {
-    cu.timdMergeData      = candidates.front().data;
-    cu.timdMergeTrType[0] = candidates.front().trType[0];
-    cu.timdMergeTrType[1] = candidates.front().trType[1];
+    cu.timdMergeData = candidates.front().data;
     return true;
   }
 
@@ -4650,9 +4637,7 @@ bool IntraPrediction::deriveTimdMergeMode(const CPelBuf &recoBuf, const CompArea
     }
   }
 
-  cu.timdMergeData      = candidates[bestCandidate].data;
-  cu.timdMergeTrType[0] = candidates[bestCandidate].trType[0];
-  cu.timdMergeTrType[1] = candidates[bestCandidate].trType[1];
+  cu.timdMergeData = candidates[bestCandidate].data;
   return true;
 }
 
