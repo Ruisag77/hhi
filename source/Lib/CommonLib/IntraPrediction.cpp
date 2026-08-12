@@ -4474,7 +4474,7 @@ bool IntraPrediction::deriveTimdMergeMode(const CPelBuf &recoBuf, const CompArea
   }
 
   const auto cuArea = cu.lwidth() * cu.lheight();
-  if (cuArea <= 16 || (cu.slice->isIntra() && cuArea > 1024))
+  if (cuArea <= 16 || (cu.slice->isIntra() && cuArea > TIMD_MERGE_MAX_INTRA_SLICE_CU_AREA))
   {
     return false;
   }
@@ -4552,10 +4552,12 @@ bool IntraPrediction::deriveTimdMergeMode(const CPelBuf &recoBuf, const CompArea
     return true;
   }
 
-  constexpr int templateWidth  = 1;
-  constexpr int templateHeight = 1;
-  const auto templateInfo = CU::deriveTimdRefTypePositionAndSize(cu, templateWidth, templateHeight);
-  const auto templateType = templateInfo.eTemplateType;
+  const bool useLargeTemplate = cuArea > TIMD_MERGE_TEMPLATE_AREA_THRESHOLD &&
+                                cuArea <= TIMD_MERGE_MAX_INTRA_SLICE_CU_AREA;
+  const int  templateWidth    = useLargeTemplate ? TIMD_MERGE_LARGE_TEMPLATE_SIZE : 1;
+  const int  templateHeight   = useLargeTemplate ? TIMD_MERGE_LARGE_TEMPLATE_SIZE : 1;
+  const auto templateInfo     = CU::deriveTimdRefTypePositionAndSize(cu, templateWidth, templateHeight);
+  const auto templateType     = templateInfo.eTemplateType;
   if (templateType == NO_NEIGHBOR)
   {
     cu.timdMergeData      = candidates.front().data;
@@ -4567,8 +4569,9 @@ bool IntraPrediction::deriveTimdMergeMode(const CPelBuf &recoBuf, const CompArea
   const auto [refX, refY]          = templateInfo.iRefPosition;
   const auto [refWidth, refHeight] = templateInfo.uiRefSize;
   const int channelBitDepth        = cu.slice->m_sps->m_bitDepths[ChannelType::LUMA];
-  constexpr ptrdiff_t predStride   = MAX_CU_SIZE + 2;
-  Pel predLuma[(MAX_CU_SIZE + 2) * (MAX_CU_SIZE + 2)];
+  constexpr ptrdiff_t predStride   = MAX_CU_SIZE + TIMD_MERGE_LARGE_TEMPLATE_SIZE;
+  Pel predLuma[(MAX_CU_SIZE + TIMD_MERGE_LARGE_TEMPLATE_SIZE) *
+               (MAX_CU_SIZE + TIMD_MERGE_LARGE_TEMPLATE_SIZE)];
   Pel *pred = predLuma;
 
   const Pel *org       = recoBuf.buf;
@@ -4580,8 +4583,8 @@ bool IntraPrediction::deriveTimdMergeMode(const CPelBuf &recoBuf, const CompArea
   distParam[0].useMR       = false;
   distParam[1].applyWeight = false;
   distParam[1].useMR       = false;
-  // A TIMD-Merge template is one sample thick. The HAD kernels require both dimensions to be at least two samples,
-  // so use SAD for these N x 1 and 1 x N template strips.
+  // Keep SAD for both template sizes. The one-sample strips do not meet the HAD kernels' minimum dimensions, and
+  // using the same metric on both sides of the area threshold keeps candidate ranking consistent.
   constexpr int useHadamard = 0;
 
   if (templateType == LEFT_ABOVE_NEIGHBOR)

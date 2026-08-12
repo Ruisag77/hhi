@@ -290,7 +290,7 @@ bool CU::allowTimdMerge(const CodingUnit &cu)
   }
 
   const auto cuArea = cu.lwidth() * cu.lheight();
-  if (cuArea <= 16 || (cu.slice->isIntra() && cuArea > 1024))
+  if (cuArea <= 16 || (cu.slice->isIntra() && cuArea > TIMD_MERGE_MAX_INTRA_SLICE_CU_AREA))
   {
     return false;
   }
