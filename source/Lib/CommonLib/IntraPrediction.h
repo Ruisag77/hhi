@@ -49,6 +49,8 @@
 #include "RdCost.h"
 #include "CommonLib/InterpolationFilter.h"
 
+#include <map>
+
 //! \ingroup CommonLib
 //! \{
 
@@ -65,6 +67,22 @@ enum PredBuf
 };
 
 static constexpr uint32_t MAX_INTRA_FILTER_DEPTHS = 8;
+
+struct TimdMergeAreaStats
+{
+  uint64_t deriveCalls { 0 };
+  uint64_t areaEligibleCalls { 0 };
+  uint64_t intraSliceDeriveCalls { 0 };
+  uint64_t intraSliceAreaEligibleCalls { 0 };
+  uint64_t neighbourAvailableCalls { 0 };
+  uint64_t candidateAvailableCalls { 0 };
+  uint64_t multiCandidateCalls { 0 };
+  uint64_t templateRankedCalls { 0 };
+  uint64_t largeTemplateCalls { 0 };
+};
+
+using TimdMergeAreaStatsBySize = std::map<std::pair<int, int>, TimdMergeAreaStats>;
+using TimdMergeAreaStatsByPoc  = std::map<int, TimdMergeAreaStatsBySize>;
 
 struct LeastSquaresSolver
 {
@@ -99,6 +117,9 @@ protected:
   static const int     extInvAngTable[64];
 
 private:
+  bool                        m_timdMergeAreaStatsEnabled { false };
+  TimdMergeAreaStatsByPoc     m_timdMergeAreaStatsByPoc;
+
   Pel *m_yuvExt2[MAX_NUM_COMP][4];
   int  m_yuvExtSize2;
 
@@ -411,6 +432,13 @@ public:
   int deriveTimdMode(const CPelBuf &recoBuf, const CompArea &area, CodingUnit &cu,
                      const TimdDerivationMethod timdDerivationMode);
   bool deriveTimdMergeMode(const CPelBuf &recoBuf, const CompArea &area, CodingUnit &cu);
+
+  void resetTimdMergeAreaStats(const bool enabled)
+  {
+    m_timdMergeAreaStatsEnabled = enabled;
+    m_timdMergeAreaStatsByPoc.clear();
+  }
+  const TimdMergeAreaStatsByPoc &getTimdMergeAreaStats() const { return m_timdMergeAreaStatsByPoc; }
 
   using TimdModeCostList = static_vector<std::pair<uint64_t, int>, NUM_LUMA_MODE>;
   TimdModeCostList m_timdModeCostList;

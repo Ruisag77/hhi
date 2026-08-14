@@ -730,6 +730,8 @@ bool EncAppCfg::parseCfg(int argc, char *argv[], EncCfg *encCfg)
   ("InputPathPrefix,-ipp",                            inputPathPrefix,                                  "pathname to prepend to input filename")
   ("BitstreamFile,b",                                 encCfg->m_bitstreamFileName,                      "Bitstream output file name")
   ("ReconFile,o",                                     encCfg->m_reconFileName,                          "Reconstructed YUV output file name")
+  ("TimdMergeAreaStats",                              encCfg->m_timdMergeAreaStats,                     "Write final and derivation-stage TIMD-Merge block-size statistics")
+  ("TimdMergeAreaStatsRoot",                          encCfg->m_timdMergeAreaStatsRoot,                 "Root directory for parallel-safe TIMD-Merge statistic shards")
 #if JVET_Z0120_SII_SEI_PROCESSING
   ("SEIShutterIntervalPreFilename,-sii",              encCfg->m_seiCfg.m_shutterIntervalPreFileName,    "File name of Pre-Filtering video. If empty, not output video\n")
 #endif
@@ -5511,6 +5513,8 @@ void EncAppCfg::xPrintParameter(EncCfg *encCfg)
   msg(DETAILS, "Input          File                    : %s\n", encCfg->m_inputFileName.c_str());
   msg(DETAILS, "Bitstream      File                    : %s\n", encCfg->m_bitstreamFileName.c_str());
   msg(DETAILS, "Reconstruction File                    : %s\n", encCfg->m_reconFileName.c_str());
+  msg(DETAILS, "TIMD-Merge area statistics             : %s\n",
+      encCfg->m_timdMergeAreaStats ? encCfg->m_timdMergeAreaStatsRoot.c_str() : "Disabled");
 #if JVET_Z0120_SII_SEI_PROCESSING
   if (encCfg->m_seiCfg.m_ShutterFilterEnable && !encCfg->m_seiCfg.m_shutterIntervalPreFileName.empty())
   {

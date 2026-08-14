@@ -538,6 +538,8 @@ struct EncCfg
   std::string m_inputFileName { "" };   // source file name
   std::string m_bitstreamFileName { "" };   // output bitstream file
   std::string m_reconFileName { "" };   // output reconstruction file
+  bool        m_timdMergeAreaStats { true };   // write parallel-safe TIMD-Merge block-size statistics
+  std::string m_timdMergeAreaStatsRoot { "timd_merge_area_stats" };
 
   int      m_frameRate { 0 };
   int      m_frameSkip { 0 };

@@ -44,7 +44,46 @@
 #include "CommonLib/dtrace_blockstatistics.h"
 #endif
 
+#include <cctype>
+#include <filesystem>
+#include <fstream>
 #include <math.h>
+#include <set>
+#include <system_error>
+
+namespace
+{
+std::string sanitizeTimdMergeStatsPathComponent(const std::string &value)
+{
+  std::string sanitized;
+  sanitized.reserve(value.size());
+  for (const unsigned char ch: value)
+  {
+    sanitized.push_back(std::isalnum(ch) || ch == '.' || ch == '-' || ch == '_' ? char(ch) : '_');
+  }
+  return sanitized.empty() ? "unknown" : sanitized;
+}
+
+std::string escapeTimdMergeStatsCsv(const std::string &value)
+{
+  if (value.find_first_of(",\"\r\n") == std::string::npos)
+  {
+    return value;
+  }
+
+  std::string escaped = "\"";
+  for (const char ch: value)
+  {
+    escaped += ch;
+    if (ch == '"')
+    {
+      escaped += '"';
+    }
+  }
+  escaped += '"';
+  return escaped;
+}
+}   // namespace
 
 //! \ingroup EncoderLib
 //! \{
@@ -76,6 +115,8 @@ void EncSlice::create(int width, int height, ChromaFormat chromaFormat, uint32_t
 
 void EncSlice::destroy()
 {
+  xWriteTimdMergeAreaStats();
+
   // free lambda and QP arrays
   m_vdRdPicLambda.clear();
   m_vdRdPicQp.clear();
@@ -102,6 +143,208 @@ void EncSlice::init(EncLib *pcEncLib, const SPS &sps)
   m_vdRdPicQp.resize(m_encCfg->m_uiDeltaQpRD * 2 + 1);
   m_viRdPicQp.resize(m_encCfg->m_uiDeltaQpRD * 2 + 1);
   m_pcRateCtrl = pcEncLib->getRateCtrl();
+
+  xPrepareTimdMergeAreaStats();
+}
+
+void EncSlice::xPrepareTimdMergeAreaStats()
+{
+  namespace fs = std::filesystem;
+
+  m_timdMergeFinalAreaStatsByPoc.clear();
+  m_timdMergeAreaStatsSequence.clear();
+  m_timdMergeAreaStatsShardName.clear();
+  m_timdMergeAreaStatsShardPath.clear();
+  m_timdMergeAreaStatsPrepared = false;
+  m_timdMergeAreaStatsWritten  = false;
+
+  const bool enabled = m_encCfg && m_encCfg->m_timdMergeAreaStats;
+  m_pcLib->getIntraSearch()->resetTimdMergeAreaStats(enabled);
+  if (!enabled)
+  {
+    return;
+  }
+
+  const fs::path    bitstreamPath(m_encCfg->m_bitstreamFileName);
+  const std::string parentName = bitstreamPath.parent_path().filename().string();
+  const std::string rasMarker  = "_RAS_Result_qp";
+  const size_t      markerPos  = parentName.find(rasMarker);
+  if (markerPos != std::string::npos && markerPos > 0)
+  {
+    m_timdMergeAreaStatsSequence = parentName.substr(0, markerPos);
+  }
+  else
+  {
+    const std::string inputStem = fs::path(m_encCfg->m_inputFileName).stem().string();
+    const size_t      separator = inputStem.find('_');
+    m_timdMergeAreaStatsSequence = inputStem.substr(0, separator);
+  }
+  m_timdMergeAreaStatsSequence = sanitizeTimdMergeStatsPathComponent(m_timdMergeAreaStatsSequence);
+
+  m_timdMergeAreaStatsShardName = sanitizeTimdMergeStatsPathComponent(bitstreamPath.stem().string());
+  if (m_pcLib->getLayerId() > 0)
+  {
+    m_timdMergeAreaStatsShardName += "_layer" + std::to_string(m_pcLib->getLayerId());
+  }
+
+  const fs::path statsRoot = m_encCfg->m_timdMergeAreaStatsRoot.empty()
+    ? fs::path("timd_merge_area_stats")
+    : fs::path(m_encCfg->m_timdMergeAreaStatsRoot);
+  const fs::path shardDir = statsRoot / ".shards" / m_timdMergeAreaStatsSequence /
+    ("QP" + std::to_string(m_encCfg->m_iQP));
+
+  std::error_code error;
+  fs::create_directories(shardDir, error);
+  if (error)
+  {
+    msg(WARNING, "Warning: cannot create TIMD-Merge area statistics directory '%s': %s\n",
+        shardDir.string().c_str(), error.message().c_str());
+    return;
+  }
+
+  const fs::path shardPath = shardDir / (m_timdMergeAreaStatsShardName + ".csv");
+  const fs::path tempPath(shardPath.string() + ".tmp");
+  fs::remove(shardPath, error);
+  error.clear();
+  fs::remove(tempPath, error);
+  m_timdMergeAreaStatsShardPath = shardPath.string();
+  m_timdMergeAreaStatsPrepared  = true;
+}
+
+void EncSlice::xAccumulateTimdMergeFinalAreaStats(const CodingStructure &cs, const UnitArea &ctuArea, const int poc)
+{
+  if (!m_timdMergeAreaStatsPrepared)
+  {
+    return;
+  }
+
+  for (const CodingUnit &cu: cs.traverseCUs(ctuArea, ChannelType::LUMA))
+  {
+    if (!cu.Y().valid() || !isLuma(cu.chType))
+    {
+      continue;
+    }
+
+    TimdMergeFinalAreaStats &stats =
+      m_timdMergeFinalAreaStatsByPoc[poc][{ cu.lwidth(), cu.lheight() }];
+    stats.lumaCus++;
+    stats.intraCus += cu.predMode == MODE_INTRA;
+    stats.timdCus += cu.timdFlag;
+    stats.timdMergeCus += cu.timdFlag && cu.timdMergeFlag;
+    stats.intraSliceLumaCus += cu.slice->isIntra();
+    stats.intraSliceTimdMergeCus += cu.slice->isIntra() && cu.timdFlag && cu.timdMergeFlag;
+  }
+}
+
+void EncSlice::xWriteTimdMergeAreaStats()
+{
+  namespace fs = std::filesystem;
+
+  if (m_timdMergeAreaStatsWritten)
+  {
+    return;
+  }
+  m_timdMergeAreaStatsWritten = true;
+  if (!m_timdMergeAreaStatsPrepared || !m_encCfg || !m_pcLib)
+  {
+    return;
+  }
+
+  const TimdMergeAreaStatsByPoc &derivationStats = m_pcLib->getIntraSearch()->getTimdMergeAreaStats();
+  std::map<int, std::set<std::pair<int, int>>> sizesByPoc;
+  for (const auto &[poc, bySize]: derivationStats)
+  {
+    for (const auto &[size, unused]: bySize)
+    {
+      (void) unused;
+      sizesByPoc[poc].insert(size);
+    }
+  }
+  for (const auto &[poc, bySize]: m_timdMergeFinalAreaStatsByPoc)
+  {
+    for (const auto &[size, unused]: bySize)
+    {
+      (void) unused;
+      sizesByPoc[poc].insert(size);
+    }
+  }
+
+  const fs::path shardPath(m_timdMergeAreaStatsShardPath);
+  const fs::path tempPath(shardPath.string() + ".tmp");
+  std::ofstream  output(tempPath, std::ios::out | std::ios::trunc);
+  if (!output)
+  {
+    msg(WARNING, "Warning: cannot open TIMD-Merge area statistics file '%s'\n", tempPath.string().c_str());
+    return;
+  }
+
+  output << "schema_version,sequence,qp,layer_id,shard,bitstream,frame_skip,frames_to_encode,poc,source_frame,"
+            "width,height,area,configured_max_area,configured_template_threshold,configured_large_template_size,"
+            "derive_calls,area_eligible_calls,intra_slice_derive_calls,intra_slice_area_eligible_calls,"
+            "neighbour_available_calls,candidate_available_calls,"
+            "multi_candidate_calls,template_ranked_calls,large_template_calls,final_luma_cus,final_intra_cus,"
+            "final_timd_cus,final_timd_merge_cus,final_intra_slice_luma_cus,final_intra_slice_timd_merge_cus\n";
+
+  for (const auto &[poc, sizes]: sizesByPoc)
+  {
+    const int64_t sourceFrame = m_encCfg->m_fieldSeqFlag
+      ? int64_t(m_encCfg->m_frameSkip) * 2 + int64_t(poc) * m_encCfg->m_temporalSubsampleRatio
+      : int64_t(m_encCfg->m_frameSkip) + int64_t(poc) * m_encCfg->m_temporalSubsampleRatio;
+
+    for (const auto &[width, height]: sizes)
+    {
+      TimdMergeAreaStats      derive;
+      TimdMergeFinalAreaStats final;
+
+      const auto pocDeriveIt = derivationStats.find(poc);
+      if (pocDeriveIt != derivationStats.end())
+      {
+        const auto sizeIt = pocDeriveIt->second.find({ width, height });
+        if (sizeIt != pocDeriveIt->second.end())
+        {
+          derive = sizeIt->second;
+        }
+      }
+      const auto pocFinalIt = m_timdMergeFinalAreaStatsByPoc.find(poc);
+      if (pocFinalIt != m_timdMergeFinalAreaStatsByPoc.end())
+      {
+        const auto sizeIt = pocFinalIt->second.find({ width, height });
+        if (sizeIt != pocFinalIt->second.end())
+        {
+          final = sizeIt->second;
+        }
+      }
+
+      output << 1 << ',' << escapeTimdMergeStatsCsv(m_timdMergeAreaStatsSequence) << ',' << m_encCfg->m_iQP << ','
+             << m_pcLib->getLayerId() << ',' << escapeTimdMergeStatsCsv(m_timdMergeAreaStatsShardName) << ','
+             << escapeTimdMergeStatsCsv(m_encCfg->m_bitstreamFileName) << ',' << m_encCfg->m_frameSkip << ','
+             << m_encCfg->m_framesToBeEncoded << ',' << poc << ',' << sourceFrame << ',' << width << ',' << height
+             << ',' << width * height << ',' << TIMD_MERGE_MAX_INTRA_SLICE_CU_AREA << ','
+             << TIMD_MERGE_TEMPLATE_AREA_THRESHOLD << ',' << TIMD_MERGE_LARGE_TEMPLATE_SIZE << ','
+             << derive.deriveCalls << ',' << derive.areaEligibleCalls << ',' << derive.intraSliceDeriveCalls << ','
+             << derive.intraSliceAreaEligibleCalls << ',' << derive.neighbourAvailableCalls << ','
+             << derive.candidateAvailableCalls << ',' << derive.multiCandidateCalls << ','
+             << derive.templateRankedCalls << ',' << derive.largeTemplateCalls << ',' << final.lumaCus << ','
+             << final.intraCus << ',' << final.timdCus << ',' << final.timdMergeCus << ','
+             << final.intraSliceLumaCus << ',' << final.intraSliceTimdMergeCus << '\n';
+    }
+  }
+  output.close();
+  if (!output)
+  {
+    msg(WARNING, "Warning: failed while writing TIMD-Merge area statistics file '%s'\n", tempPath.string().c_str());
+    return;
+  }
+
+  std::error_code error;
+  fs::remove(shardPath, error);
+  error.clear();
+  fs::rename(tempPath, shardPath, error);
+  if (error)
+  {
+    msg(WARNING, "Warning: cannot finalize TIMD-Merge area statistics file '%s': %s\n",
+        shardPath.string().c_str(), error.message().c_str());
+  }
 }
 
 void EncSlice::setUpLambda(Slice *slice, const double dLambda, int qp)
@@ -2094,6 +2337,7 @@ void EncSlice::encodeSlice(Picture *pic, OutputBitstream *pcSubstreams, uint32_t
       getBinVector(ctuXPosInCtus));   // clear the bin counters and prepare for collecting new data for this CTU
     m_CABACWriter->coding_tree_unit(cs, ctuArea, pic->m_prevQP, ctuRsAddr);
     m_CABACWriter->setBinBuffer(nullptr);   // done with data collection for this CTU
+    xAccumulateTimdMergeFinalAreaStats(cs, ctuArea, pic->m_poc);
 
     if (storeContexts(pcSlice, ctuXPosInCtus, ctuYPosInCtus))   // store CABAC context to be used in next frames
     {

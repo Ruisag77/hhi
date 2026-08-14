@@ -4473,16 +4473,34 @@ bool IntraPrediction::deriveTimdMergeMode(const CPelBuf &recoBuf, const CompArea
     return false;
   }
 
+  TimdMergeAreaStats *areaStats = nullptr;
+  const bool          intraSlice = cu.slice->isIntra();
+  if (m_timdMergeAreaStatsEnabled)
+  {
+    areaStats = &m_timdMergeAreaStatsByPoc[cu.slice->m_poc][{ cu.lwidth(), cu.lheight() }];
+    areaStats->deriveCalls++;
+    areaStats->intraSliceDeriveCalls += intraSlice;
+  }
+
   const auto cuArea = cu.lwidth() * cu.lheight();
-  if (cuArea <= 16 || (cu.slice->isIntra() && cuArea > TIMD_MERGE_MAX_INTRA_SLICE_CU_AREA))
+  if (cuArea <= 16 || (intraSlice && cuArea > TIMD_MERGE_MAX_INTRA_SLICE_CU_AREA))
   {
     return false;
+  }
+  if (areaStats)
+  {
+    areaStats->areaEligibleCalls++;
+    areaStats->intraSliceAreaEligibleCalls += intraSlice;
   }
 
   std::vector<const CodingUnit *> neighbours;
   if (PU::getTimdMergeNeighbours(cu, neighbours) == 0)
   {
     return false;
+  }
+  if (areaStats)
+  {
+    areaStats->neighbourAvailableCalls++;
   }
 
   struct TimdMergeCandidate
@@ -4542,6 +4560,10 @@ bool IntraPrediction::deriveTimdMergeMode(const CPelBuf &recoBuf, const CompArea
   {
     return false;
   }
+  if (areaStats)
+  {
+    areaStats->candidateAvailableCalls++;
+  }
 
   cu.timdMergeAvailable = true;
   if (candidates.size() == 1)
@@ -4550,6 +4572,10 @@ bool IntraPrediction::deriveTimdMergeMode(const CPelBuf &recoBuf, const CompArea
     cu.timdMergeTrType[0] = candidates.front().trType[0];
     cu.timdMergeTrType[1] = candidates.front().trType[1];
     return true;
+  }
+  if (areaStats)
+  {
+    areaStats->multiCandidateCalls++;
   }
 
   const bool useLargeTemplate = cuArea > TIMD_MERGE_TEMPLATE_AREA_THRESHOLD &&
@@ -4564,6 +4590,11 @@ bool IntraPrediction::deriveTimdMergeMode(const CPelBuf &recoBuf, const CompArea
     cu.timdMergeTrType[0] = candidates.front().trType[0];
     cu.timdMergeTrType[1] = candidates.front().trType[1];
     return true;
+  }
+  if (areaStats)
+  {
+    areaStats->templateRankedCalls++;
+    areaStats->largeTemplateCalls += useLargeTemplate;
   }
 
   const auto [refX, refY]          = templateInfo.iRefPosition;

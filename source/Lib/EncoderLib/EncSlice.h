@@ -46,11 +46,27 @@
 #include "CommonLib/CommonDef.h"
 #include "CommonLib/Picture.h"
 
+#include <map>
+#include <string>
+
 //! \ingroup EncoderLib
 //! \{
 
 class EncLib;
 class EncGOP;
+
+struct TimdMergeFinalAreaStats
+{
+  uint64_t lumaCus { 0 };
+  uint64_t intraCus { 0 };
+  uint64_t timdCus { 0 };
+  uint64_t timdMergeCus { 0 };
+  uint64_t intraSliceLumaCus { 0 };
+  uint64_t intraSliceTimdMergeCus { 0 };
+};
+
+using TimdMergeFinalAreaStatsBySize = std::map<std::pair<int, int>, TimdMergeFinalAreaStats>;
+using TimdMergeFinalAreaStatsByPoc  = std::map<int, TimdMergeFinalAreaStatsBySize>;
 
 // ====================================================================================================================
 // Class definition
@@ -97,6 +113,13 @@ private:
   int m_gopID;
 #endif
   std::vector<BinStoreVector> m_binVectors;
+
+  TimdMergeFinalAreaStatsByPoc m_timdMergeFinalAreaStatsByPoc;
+  std::string                  m_timdMergeAreaStatsSequence;
+  std::string                  m_timdMergeAreaStatsShardName;
+  std::string                  m_timdMergeAreaStatsShardPath;
+  bool                         m_timdMergeAreaStatsPrepared { false };
+  bool                         m_timdMergeAreaStatsWritten { false };
 
 public:
   double initializeLambda(const Slice *slice, const int gopId, const int refQP,
@@ -149,6 +172,9 @@ public:
   CABACDataStore *getCABACDataStore() { return m_CABACWriter->m_CABACDataStore; }
 
 private:
+  void   xPrepareTimdMergeAreaStats();
+  void   xAccumulateTimdMergeFinalAreaStats(const CodingStructure &cs, const UnitArea &ctuArea, int poc);
+  void   xWriteTimdMergeAreaStats();
   double xGetQPValueAccordingToLambda(double lambda);
   void   xSetUseLICOnPicLevel(Slice *slice, bool fastMode);
 };
