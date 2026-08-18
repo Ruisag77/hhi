@@ -1803,6 +1803,10 @@ void CABACReader::intra_luma_pred_mode(CodingUnit &cu)
   if (cu.timdFlag)
   {
     timd_sad_flag(cu);
+    if (!cu.timdSadFlag)
+    {
+      of_timd_flag(cu);
+    }
     return;
   }
   eip_flag(cu);
@@ -4818,6 +4822,24 @@ void CABACReader::timd_sad_flag(CodingUnit &cu)
     cu.timdSadFlag = m_binDecoder.decodeBin(Ctx::TimdSadFlag());
     DTRACE(g_trace_ctx, D_SYNTAX, "timd_sad_flag() pos=(%d,%d) size=(%d,%d) mode=%d\n", cu.lumaPos().x, cu.lumaPos().y,
            cu.lumaSize().width, cu.lumaSize().height, cu.timdSadFlag);
+  }
+}
+
+void CABACReader::of_timd_flag(CodingUnit &cu)
+{
+  RExt__DECODER_DEBUG_BIT_STATISTICS_CREATE_SET_SIZE(STATS__CABAC_BITS__OFTIMD_FLAG, cu.lumaSize());
+
+  cu.ofTimdFlag = false;
+  if (!cu.Y().valid() || !cu.cs->sps->m_useTIMD || !cu.cs->sps->m_useOFTIMD || !cu.timdFlag || cu.timdSadFlag)
+  {
+    return;
+  }
+
+  if (CU::allowOfTimd(cu))
+  {
+    cu.ofTimdFlag = m_binDecoder.decodeBin(Ctx::OfTimdFlag());
+    DTRACE(g_trace_ctx, D_SYNTAX, "of_timd_flag() pos=(%d,%d) size=(%d,%d) mode=%d\n", cu.lumaPos().x,
+           cu.lumaPos().y, cu.lumaSize().width, cu.lumaSize().height, cu.ofTimdFlag);
   }
 }
 

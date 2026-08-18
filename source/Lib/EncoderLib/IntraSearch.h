@@ -218,6 +218,7 @@ private:
     bool          dimdFlg { false };      // CU::dimdFlg
     bool          timdFlg { false };      // CU::timdFlag
     bool          timdSadFlg { false };   // CU::timdSadFlag
+    bool          ofTimdFlg { false };    // CU::ofTimdFlag
     bool          obicFlg { false };      // CU::obicFlg
     bool          obicAvailFlg { false }; // CU::obicAvailFlag
     bool          eipFlg { false };       // CU::eipFlg
@@ -262,8 +263,9 @@ private:
     {
       return (mipFlg == cmp.mipFlg && mipTrFlg == cmp.mipTrFlg && mRefId == cmp.mRefId && modeId == cmp.modeId &&
               bdpcm == cmp.bdpcm && plIdx == cmp.plIdx && dimdFlg == cmp.dimdFlg && timdFlg == cmp.timdFlg &&
-              obicFlg == cmp.obicFlg && obicAvailFlg == cmp.obicAvailFlg && eipFlg == cmp.eipFlg &&
-              sgpmFlg == cmp.sgpmFlg && sgpmInfo == cmp.sgpmInfo);
+              timdSadFlg == cmp.timdSadFlg && ofTimdFlg == cmp.ofTimdFlg && obicFlg == cmp.obicFlg &&
+              obicAvailFlg == cmp.obicAvailFlg && eipFlg == cmp.eipFlg && sgpmFlg == cmp.sgpmFlg &&
+              sgpmInfo == cmp.sgpmInfo);
     }
   };
 

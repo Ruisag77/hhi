@@ -297,6 +297,8 @@ CodingUnit &CodingUnit::operator=(const CodingUnit &other)
   timdData         = other.timdData;
   timdSadFlag      = other.timdSadFlag;
   timdSadData      = other.timdSadData;
+  ofTimdFlag       = other.ofTimdFlag;
+  ofTimdData       = other.ofTimdData;
   obicAvailFlag    = other.obicAvailFlag;
   obicFlag         = other.obicFlag;
   obicData         = other.obicData;
@@ -445,6 +447,8 @@ void CodingUnit::initCuData()
   timdData       = {};
   timdSadFlag    = false;
   timdSadData    = {};
+  ofTimdFlag     = false;
+  ofTimdData     = {};
   obicAvailFlag  = false;
   obicFlag       = false;
   obicData       = {};

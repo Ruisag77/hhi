@@ -79,7 +79,9 @@ void IntraPrediction::deriveObicMode(const CPelBuf &recoBuf, const CompArea &are
       (weight[i] * (cuNeighbours[i]->lumaSize().width * cuNeighbours[i]->lumaSize().height) + 2) / 4;
     if (cuNeighbours[i]->timdFlag)
     {
-      auto &neighbourTimd = cuNeighbours[i]->timdData;
+      const auto &neighbourTimd = cuNeighbours[i]->ofTimdFlag    ? cuNeighbours[i]->ofTimdData
+                                  : cuNeighbours[i]->timdSadFlag ? cuNeighbours[i]->timdSadData
+                                                                 : cuNeighbours[i]->timdData;
       int   m             = MAP131TO67(neighbourTimd.blendMode[0]);
       int   w[3]          = { 0 };
       w[0]                = neighbourTimd.relWeight[0];

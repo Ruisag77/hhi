@@ -281,6 +281,281 @@ bool CU::allowTimdSad(const CodingUnit &cu)
   return cu.cs->sps->m_useTIMD;
 }
 
+namespace
+{
+constexpr int OF_TIMD_MAX_NEIGHBOURS    = 7;
+constexpr int OF_TIMD_MIN_BLOCK_AREA    = 64;
+constexpr int OF_TIMD_MODE_PERIOD       = 128;
+constexpr int OF_TIMD_OUTLIER_THRESHOLD = 32;
+
+struct OfTimdNeighbour
+{
+  const CodingUnit *cu;
+  int64_t           x;
+  int64_t           y;
+};
+
+struct OfTimdSample
+{
+  int64_t x;
+  int64_t y;
+  int     mode;
+};
+
+int64_t ofTimdDeterminant(const int64_t a00, const int64_t a01, const int64_t a02, const int64_t a10,
+                          const int64_t a11, const int64_t a12, const int64_t a20, const int64_t a21,
+                          const int64_t a22)
+{
+  return a00 * (a11 * a22 - a12 * a21) - a01 * (a10 * a22 - a12 * a20) +
+         a02 * (a10 * a21 - a11 * a20);
+}
+
+bool isOfTimdOrientationCandidate(const CodingUnit &neighbour)
+{
+  if (!neighbour.Y().valid() || !CU::isIntra(neighbour) || CU::isPLT(neighbour))
+  {
+    return false;
+  }
+
+  // Decoder-derived modes are known from their flags while parsing a CTU. Their actual directions become available
+  // later, when the CUs are reconstructed in coding order.
+  if (neighbour.timdFlag || neighbour.dimdFlag)
+  {
+    return true;
+  }
+
+  if (neighbour.mipFlag || neighbour.eipFlag || neighbour.sgpm ||
+      neighbour.bdpcmMode[0] != BdpcmMode::NONE)
+  {
+    return false;
+  }
+
+  // The final conventional intra direction is interpreted during reconstruction, after the complete CTU syntax has
+  // been parsed. Treat every otherwise eligible conventional intra CU as a structural observation here; the actual
+  // direction is validated only by deriveOfTimdModeFromNeighbours().
+  return true;
+}
+
+int collectOfTimdNeighbours(const CodingUnit &cu, OfTimdNeighbour neighbours[OF_TIMD_MAX_NEIGHBOURS])
+{
+  const int width  = cu.lwidth();
+  const int height = cu.lheight();
+  const Position candidatePositions[OF_TIMD_MAX_NEIGHBOURS] = {
+    cu.lumaPos().offset(-1, height >> 2),
+    cu.lumaPos().offset(-1, (3 * height) >> 2),
+    cu.lumaPos().offset(width >> 2, -1),
+    cu.lumaPos().offset((3 * width) >> 2, -1),
+    cu.lumaPos().offset(-1, -1),
+    cu.lumaPos().offset(width, -1),
+    cu.lumaPos().offset(-1, height),
+  };
+
+  const int64_t currentCentreX = 2 * int64_t(cu.lx()) + width;
+  const int64_t currentCentreY = 2 * int64_t(cu.ly()) + height;
+  int           numNeighbours  = 0;
+
+  for (const Position &position: candidatePositions)
+  {
+    const CodingUnit *neighbour = cu.cs->getCURestricted(position, cu, ChannelType::LUMA);
+    if (!neighbour || !isOfTimdOrientationCandidate(*neighbour))
+    {
+      continue;
+    }
+
+    bool duplicate = false;
+    for (int i = 0; i < numNeighbours; i++)
+    {
+      duplicate |= neighbours[i].cu == neighbour;
+    }
+    if (duplicate)
+    {
+      continue;
+    }
+
+    neighbours[numNeighbours].cu = neighbour;
+    neighbours[numNeighbours].x  = 2 * int64_t(neighbour->lx()) + neighbour->lwidth() - currentCentreX;
+    neighbours[numNeighbours].y  = 2 * int64_t(neighbour->ly()) + neighbour->lheight() - currentCentreY;
+    numNeighbours++;
+  }
+
+  return numNeighbours;
+}
+
+bool hasNonCollinearOfTimdNeighbours(const OfTimdNeighbour *neighbours, const int numNeighbours)
+{
+  int64_t sx = 0, sy = 0, sxx = 0, sxy = 0, syy = 0;
+  for (int i = 0; i < numNeighbours; i++)
+  {
+    const int64_t x = neighbours[i].x;
+    const int64_t y = neighbours[i].y;
+    sx += x;
+    sy += y;
+    sxx += x * x;
+    sxy += x * y;
+    syy += y * y;
+  }
+
+  const int64_t determinant =
+    ofTimdDeterminant(sxx, sxy, sx, sxy, syy, sy, sx, sy, int64_t(numNeighbours));
+  return determinant > 0;
+}
+
+bool getOfTimdNeighbourMode(const CodingUnit &neighbour, int &mode)
+{
+  if (neighbour.timdFlag)
+  {
+    const TimdData &data = neighbour.ofTimdFlag    ? neighbour.ofTimdData
+                           : neighbour.timdSadFlag ? neighbour.timdSadData
+                                                   : neighbour.timdData;
+    mode = data.blendMode[0];
+    return mode > DC_IDX && mode <= EXT_VDIA_IDX;
+  }
+
+  if (neighbour.dimdFlag)
+  {
+    const int derivedMode = neighbour.obicFlag ? neighbour.obicData.blendMode[0] : neighbour.dimdData.blendMode[0];
+    if (derivedMode <= DC_IDX || derivedMode >= NUM_LUMA_MODE)
+    {
+      return false;
+    }
+    mode = MAP67TO131(derivedMode);
+    return true;
+  }
+
+  int conventionalMode = neighbour.intraDir[ChannelType::LUMA];
+  if (neighbour.plDir != PlanarDirType::NO_DIR)
+  {
+    conventionalMode = neighbour.plDir == PlanarDirType::HOR ? HOR_IDX : VER_IDX;
+  }
+  if (conventionalMode <= DC_IDX || conventionalMode >= NUM_LUMA_MODE)
+  {
+    return false;
+  }
+
+  mode = MAP67TO131(conventionalMode);
+  return true;
+}
+
+int unwrapOfTimdMode(const int mode, const int referenceMode)
+{
+  int unwrappedMode = mode;
+  while (unwrappedMode - referenceMode > (OF_TIMD_MODE_PERIOD >> 1))
+  {
+    unwrappedMode -= OF_TIMD_MODE_PERIOD;
+  }
+  while (unwrappedMode - referenceMode < -(OF_TIMD_MODE_PERIOD >> 1))
+  {
+    unwrappedMode += OF_TIMD_MODE_PERIOD;
+  }
+  return unwrappedMode;
+}
+
+int64_t divideAndRoundOfTimd(const int64_t numerator, const int64_t denominator)
+{
+  CHECK(denominator <= 0, "OF-TIMD division requires a positive denominator");
+  return numerator >= 0 ? (numerator + (denominator >> 1)) / denominator
+                        : -((-numerator + (denominator >> 1)) / denominator);
+}
+}   // namespace
+
+bool CU::allowOfTimd(const CodingUnit &cu)
+{
+  if (!cu.Y().valid() || !cu.cs || !cu.cs->sps || !cu.cs->sps->m_useTIMD || !cu.cs->sps->m_useOFTIMD ||
+      cu.predMode != MODE_INTRA || !isLuma(cu.chType) || cu.bdpcmMode[0] != BdpcmMode::NONE ||
+      cu.Y().area() < OF_TIMD_MIN_BLOCK_AREA)
+  {
+    return false;
+  }
+
+  OfTimdNeighbour neighbours[OF_TIMD_MAX_NEIGHBOURS] {};
+  const int       numNeighbours = collectOfTimdNeighbours(cu, neighbours);
+  return numNeighbours >= 3 && hasNonCollinearOfTimdNeighbours(neighbours, numNeighbours);
+}
+
+bool CU::deriveOfTimdModeFromNeighbours(const CodingUnit &cu, int &mode)
+{
+  OfTimdNeighbour neighbours[OF_TIMD_MAX_NEIGHBOURS] {};
+  const int       numNeighbours = collectOfTimdNeighbours(cu, neighbours);
+  OfTimdSample    samples[OF_TIMD_MAX_NEIGHBOURS] {};
+  int             numSamples = 0;
+
+  for (int i = 0; i < numNeighbours; i++)
+  {
+    int neighbourMode = PLANAR_IDX;
+    if (getOfTimdNeighbourMode(*neighbours[i].cu, neighbourMode))
+    {
+      samples[numSamples++] = { neighbours[i].x, neighbours[i].y, neighbourMode };
+    }
+  }
+  if (numSamples == 0)
+  {
+    return false;
+  }
+
+  const int referenceMode = samples[0].mode;
+  int       sortedModes[OF_TIMD_MAX_NEIGHBOURS] {};
+  for (int i = 0; i < numSamples; i++)
+  {
+    samples[i].mode = unwrapOfTimdMode(samples[i].mode, referenceMode);
+    sortedModes[i]  = samples[i].mode;
+  }
+  std::sort(sortedModes, sortedModes + numSamples);
+  const int medianMode = sortedModes[numSamples >> 1];
+
+  OfTimdSample coherentSamples[OF_TIMD_MAX_NEIGHBOURS] {};
+  int          numCoherentSamples = 0;
+  for (int i = 0; i < numSamples; i++)
+  {
+    if (std::abs(samples[i].mode - medianMode) <= OF_TIMD_OUTLIER_THRESHOLD)
+    {
+      coherentSamples[numCoherentSamples++] = samples[i];
+    }
+  }
+
+  int predictedMode = medianMode;
+  if (numCoherentSamples >= 3)
+  {
+    int64_t sx = 0, sy = 0, sm = 0, sxx = 0, sxy = 0, syy = 0, sxm = 0, sym = 0;
+    for (int i = 0; i < numCoherentSamples; i++)
+    {
+      const int64_t x = coherentSamples[i].x;
+      const int64_t y = coherentSamples[i].y;
+      const int64_t m = coherentSamples[i].mode;
+      sx += x;
+      sy += y;
+      sm += m;
+      sxx += x * x;
+      sxy += x * y;
+      syy += y * y;
+      sxm += x * m;
+      sym += y * m;
+    }
+
+    const int64_t determinant =
+      ofTimdDeterminant(sxx, sxy, sx, sxy, syy, sy, sx, sy, int64_t(numCoherentSamples));
+    if (determinant > 0)
+    {
+      // Coordinates are relative to the current CU centre, so the fitted intercept is the required field value.
+      const int64_t interceptNumerator =
+        ofTimdDeterminant(sxx, sxy, sxm, sxy, syy, sym, sx, sy, sm);
+      predictedMode = int(divideAndRoundOfTimd(interceptNumerator, determinant));
+      predictedMode = Clip3(medianMode - OF_TIMD_OUTLIER_THRESHOLD, medianMode + OF_TIMD_OUTLIER_THRESHOLD,
+                            predictedMode);
+    }
+  }
+
+  while (predictedMode < 2)
+  {
+    predictedMode += OF_TIMD_MODE_PERIOD;
+  }
+  while (predictedMode > EXT_VDIA_IDX)
+  {
+    predictedMode -= OF_TIMD_MODE_PERIOD;
+  }
+  mode = Clip3(2, EXT_VDIA_IDX, predictedMode);
+  return true;
+}
+
 bool CU::isSameSlice(const CodingUnit &cu, const CodingUnit &cu2)
 {
   return cu.slice->m_independentSliceIdx == cu2.slice->m_independentSliceIdx;

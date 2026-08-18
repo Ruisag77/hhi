@@ -1037,6 +1037,7 @@ bool EncAppCfg::parseCfg(int argc, char *argv[], EncCfg *encCfg)
   ("DIMDChroma",                                      encCfg->m_DIMDChroma,                             "Enable DIMD chroma")
   ("TIMD",                                            encCfg->m_TIMD,                                   "Enable TIMD")
   ("TIMDSAD",                                         encCfg->m_TIMDSAD,                                "Enable TIMD-SAD")
+  ("OFTIMD",                                          encCfg->m_OFTIMD,                                 "Enable orientation-field TIMD")
   ("OBIC",                                            encCfg->m_OBIC,                                   "Enable OBIC")
   ("EIP",                                             encCfg->m_EIP,                                    "Enable EIP")
   ("MMEIP",                                           encCfg->m_MMEIP,                                  "Enable MMEIP")
@@ -5482,6 +5483,7 @@ bool EncAppCfg::xCheckParameter(EncCfg *encCfg)
   xConfirmPara(encCfg->m_SMVD < 0 || encCfg->m_SMVD > 3, "SMVD out of range [0..3]");
 
   xConfirmPara(encCfg->m_TIMDSAD && !encCfg->m_TIMD, "TIMD must be enabled when TIMD-SAD is enabled");
+  xConfirmPara(encCfg->m_OFTIMD && !encCfg->m_TIMD, "TIMD must be enabled when OF-TIMD is enabled");
   xConfirmPara(encCfg->m_OBIC && !encCfg->m_DIMD, "DIMD must be enabled when OBIC is enabled");
 
 #undef xConfirmPara
@@ -5881,6 +5883,7 @@ void EncAppCfg::xPrintParameter(EncCfg *encCfg)
   msg(VERBOSE, "DIMD chroma:%d ", encCfg->m_DIMDChroma);
   msg(VERBOSE, "TIMD:%d ", encCfg->m_TIMD);
   msg(VERBOSE, "TIMDSAD:%d ", encCfg->m_TIMDSAD);
+  msg(VERBOSE, "OFTIMD:%d ", encCfg->m_OFTIMD);
   msg(VERBOSE, "OBIC:%d ", encCfg->m_OBIC);
   msg(VERBOSE, "EIP:%d ", encCfg->m_EIP);
   msg(VERBOSE, "MMEIP:%d ", encCfg->m_MMEIP);

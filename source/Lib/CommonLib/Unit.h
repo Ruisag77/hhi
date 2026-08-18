@@ -486,6 +486,8 @@ struct CodingUnit : public UnitArea, public IntraPredictionData, public InterPre
   TimdData    timdData;
   bool        timdSadFlag;
   TimdData    timdSadData;
+  bool        ofTimdFlag;
+  TimdData    ofTimdData;
   bool        obicAvailFlag;
   bool        obicFlag;
   ObicData    obicData;

@@ -1332,7 +1332,7 @@ void IntraPrediction::predIntraTimd(PelBuf &piPred, CodingUnit &cu, const CompAr
       cu.derivedIpm[0] = (int8_t)MAP131TO67(cu.timdData.blendMode[0]);
       cu.derivedIpm[1] = (cu.timdData.isBlend ? (int8_t)MAP131TO67(cu.timdData.blendMode[1]) : cu.derivedIpm[0]);
     }
-    else
+    else if (timdMode == TimdMode::SAD)
     {
       CHECK(!CU::allowTimdSad(cu), "Timd SAD is not allowed for this CU");
       if (!alreadyExecutedForNormalMode)
@@ -1346,11 +1346,29 @@ void IntraPrediction::predIntraTimd(PelBuf &piPred, CodingUnit &cu, const CompAr
       cu.derivedIpm[0] = (int8_t)MAP131TO67(cu.timdSadData.blendMode[0]);
       cu.derivedIpm[1] = (cu.timdSadData.isBlend ? (int8_t)MAP131TO67(cu.timdSadData.blendMode[1]) : cu.derivedIpm[0]);
     }
+    else
+    {
+      CHECK(alreadyExecutedForNormalMode, "Normal-mode reuse is not applicable to OF-TIMD");
+      CHECK(!CU::allowOfTimd(cu), "OF-TIMD is not allowed for this CU");
+
+      int fieldMode = PLANAR_IDX;
+      CHECK(!CU::deriveOfTimdModeFromNeighbours(cu, fieldMode), "Failed to derive the OF-TIMD direction");
+
+      cu.ofTimdData              = {};
+      cu.ofTimdData.isBlend      = false;
+      cu.ofTimdData.blendMode[0] = fieldMode;
+      cu.ofTimdData.relWeight[0] = 64;
+      cu.ofTimdData.locDep[0]    = 0;
+      cu.derivedIpm[0]           = (int8_t)MAP131TO67(fieldMode);
+      cu.derivedIpm[1]           = cu.derivedIpm[0];
+    }
   }
 
   PROFILER_SCOPE(1, g_timeProfiler, P_INTRA_EST_CAND_LUMA_TIMD);
 
-  const auto &timdData = (timdMode == TimdMode::Normal ? cu.timdData : cu.timdSadData);
+  const auto &timdData = timdMode == TimdMode::Normal ? cu.timdData
+                         : timdMode == TimdMode::SAD   ? cu.timdSadData
+                                                       : cu.ofTimdData;
 
   // Do First Prediction
   int            width  = piPred.width;

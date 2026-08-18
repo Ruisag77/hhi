@@ -396,7 +396,8 @@ public:
   enum class TimdMode
   {
     Normal,
-    SAD
+    SAD,
+    Field
   };
   void predIntraTimd(PelBuf &piPred, CodingUnit &cu, const CompArea &area, bool skipDerivation, const TimdMode timdMode,
                      const bool alreadyExecutedForNormalMode);

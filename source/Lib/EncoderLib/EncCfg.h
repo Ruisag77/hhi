@@ -799,6 +799,7 @@ struct EncCfg
   bool      m_DIMDChroma { false };
   bool      m_TIMD { false };
   bool      m_TIMDSAD { false };
+  bool      m_OFTIMD { true };
   bool      m_OBIC { false };
   bool      m_EIP { false };
   bool      m_MMEIP { false };

@@ -2591,6 +2591,8 @@ void HLSyntaxReader::parseSPS(SPS *pcSPS)
   {
     xReadFlag(uiCode, "sps_timd_sad_enabled_flag");
     pcSPS->m_useTIMDSAD = uiCode != 0;
+    xReadFlag(uiCode, "sps_of_timd_enabled_flag");
+    pcSPS->m_useOFTIMD = uiCode != 0;
   }
   xReadFlag(uiCode, "sps_eip_enabled_flag");
   pcSPS->m_useEIP = uiCode != 0;

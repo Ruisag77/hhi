@@ -393,6 +393,7 @@ public:
   static const CtxSet DimdChromaFlag;
   static const CtxSet TimdFlag;
   static const CtxSet TimdSadFlag;
+  static const CtxSet OfTimdFlag;
   static const CtxSet ObicFlag;
   static const CtxSet EipFlag;
   static const CtxSet MMLMFlag;

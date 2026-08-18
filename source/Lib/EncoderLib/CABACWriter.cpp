@@ -1260,6 +1260,10 @@ void CABACWriter::intra_luma_pred_mode(const CodingUnit &cu, const CUCtxIntra &c
   if (cu.timdFlag)
   {
     timd_sad_flag(cu);
+    if (!cu.timdSadFlag)
+    {
+      of_timd_flag(cu);
+    }
     return;
   }
   eip_flag(cu);
@@ -4495,6 +4499,20 @@ void CABACWriter::timd_sad_flag(const CodingUnit &cu)
   }
 
   m_binEncoder.encodeBin(cu.timdSadFlag, Ctx::TimdSadFlag());
+}
+
+void CABACWriter::of_timd_flag(const CodingUnit &cu)
+{
+  if (!cu.Y().valid() || !cu.cs->sps->m_useTIMD || !cu.cs->sps->m_useOFTIMD || !cu.timdFlag || cu.timdSadFlag ||
+      !CU::allowOfTimd(cu))
+  {
+    CHECK(cu.ofTimdFlag, "OF-TIMD flag set although OF-TIMD is unavailable");
+    return;
+  }
+
+  m_binEncoder.encodeBin(cu.ofTimdFlag, Ctx::OfTimdFlag());
+  DTRACE(g_trace_ctx, D_SYNTAX, "of_timd_flag() pos=(%d,%d) size=(%d,%d) mode=%d\n", cu.lumaPos().x,
+         cu.lumaPos().y, cu.lumaSize().width, cu.lumaSize().height, cu.ofTimdFlag);
 }
 
 void CABACWriter::obic_flag(const CodingUnit &cu)

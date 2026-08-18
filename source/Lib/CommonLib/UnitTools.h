@@ -104,6 +104,8 @@ bool    isSameSbtSize(const uint8_t sbtInfo1, const uint8_t sbtInfo2);
 bool    getRprScaling(const SPS *sps, const PPS *curPPS, Picture *refPic, ScalingRatio &scalingRatio);
 void    checkConformanceILRP(Slice *slice);
 bool    allowTimdSad(const CodingUnit &cu);
+bool    allowOfTimd(const CodingUnit &cu);
+bool    deriveOfTimdModeFromNeighbours(const CodingUnit &cu, int &mode);
 
 bool isObmcAllowed(const CodingUnit &cu);
 
