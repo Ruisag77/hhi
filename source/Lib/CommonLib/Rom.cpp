@@ -2330,4 +2330,110 @@ const int8_t g_ccSaoBandTab[MAX_CCSAO_BAND_IDC][2] = { { COMP_Y, 1 },  { COMP_Y,
                                                        { COMP_Y, 13 }, { COMP_Y, 14 }, { COMP_Cb, 2 }, { COMP_Cr, 2 } };
 // clang-format on
 
+namespace
+{
+constexpr auto makeTimdMergeOffsetXTable()
+{
+  std::array<std::array<PosType, TIMD_MERGE_MAX_NONADJACENT>, MAX_CU_DEPTH - MIN_CU_LOG2 + 1> table {};
+  constexpr int numCandidates[7] = { 11, 13, 10, 2, 2, 2, 2 };
+  constexpr int indexMap[7][15]  = {
+    { 0, 1, 2, 3, 4, 7, 8, 9, 10, 11, 12 },
+    { 0, 1, 2, 3, 4, 7, 8, 9, 10, 11, 12, 13, 14 },
+    { 0, 1, 3, 4, 5, 6, 7, 8, 11, 12 },
+    { 0, 1 }, { 0, 1 }, { 0, 1 }, { 0, 1 }
+  };
+
+  for (size_t widthIdx = 0; widthIdx < table.size(); widthIdx++)
+  {
+    size_t        candidateIdx = 0;
+    const PosType width        = 1 << (widthIdx + MIN_CU_LOG2);
+    const int     centerX      = width >> 1;
+    for (int distanceIdx = 0; distanceIdx < 7; distanceIdx++)
+    {
+      const int distance = width * (distanceIdx + 1);
+      const int leftX    = -distance - 1;
+      const int rightX   = width + distance - 1;
+      for (int posIdx = 0; posIdx < numCandidates[distanceIdx]; posIdx++)
+      {
+        int offsetX = 0;
+        switch (indexMap[distanceIdx][posIdx])
+        {
+        case 0:  offsetX = centerX; break;
+        case 1:  offsetX = leftX; break;
+        case 2:  offsetX = leftX; break;
+        case 3:  offsetX = leftX; break;
+        case 4:  offsetX = (leftX + centerX) >> 1; break;
+        case 5:  offsetX = leftX; break;
+        case 6:  offsetX = ((centerX + (leftX + centerX)) >> 1) >> 1; break;
+        case 7:  offsetX = rightX; break;
+        case 8:  offsetX = -1; break;
+        case 9:  offsetX = rightX; break;
+        case 10: offsetX = leftX; break;
+        case 11: offsetX = (centerX + rightX) >> 1; break;
+        case 12: offsetX = leftX; break;
+        case 13: offsetX = rightX; break;
+        case 14: offsetX = (leftX + centerX) >> 1; break;
+        }
+        table[widthIdx][candidateIdx++] = offsetX;
+      }
+    }
+  }
+  return table;
+}
+
+constexpr auto makeTimdMergeOffsetYTable()
+{
+  std::array<std::array<PosType, TIMD_MERGE_MAX_NONADJACENT>, MAX_CU_DEPTH - MIN_CU_LOG2 + 1> table {};
+  constexpr int numCandidates[7] = { 11, 13, 10, 2, 2, 2, 2 };
+  constexpr int indexMap[7][15]  = {
+    { 0, 1, 2, 3, 4, 7, 8, 9, 10, 11, 12 },
+    { 0, 1, 2, 3, 4, 7, 8, 9, 10, 11, 12, 13, 14 },
+    { 0, 1, 3, 4, 5, 6, 7, 8, 11, 12 },
+    { 0, 1 }, { 0, 1 }, { 0, 1 }, { 0, 1 }
+  };
+
+  for (size_t heightIdx = 0; heightIdx < table.size(); heightIdx++)
+  {
+    size_t        candidateIdx = 0;
+    const PosType height       = 1 << (heightIdx + MIN_CU_LOG2);
+    const int     centerY      = height >> 1;
+    for (int distanceIdx = 0; distanceIdx < 7; distanceIdx++)
+    {
+      const int distance = height * (distanceIdx + 1);
+      const int bottomY  = height + distance - 1;
+      const int topY     = -distance - 1;
+      for (int posIdx = 0; posIdx < numCandidates[distanceIdx]; posIdx++)
+      {
+        int offsetY = 0;
+        switch (indexMap[distanceIdx][posIdx])
+        {
+        case 0:  offsetY = topY; break;
+        case 1:  offsetY = centerY; break;
+        case 2:  offsetY = topY; break;
+        case 3:  offsetY = (topY + centerY) >> 1; break;
+        case 4:  offsetY = topY; break;
+        case 5:  offsetY = ((centerY + (topY + centerY)) >> 1) >> 1; break;
+        case 6:  offsetY = topY; break;
+        case 7:  offsetY = -1; break;
+        case 8:  offsetY = bottomY; break;
+        case 9:  offsetY = topY; break;
+        case 10: offsetY = bottomY; break;
+        case 11: offsetY = topY; break;
+        case 12: offsetY = (centerY + bottomY) >> 1; break;
+        case 13: offsetY = (topY + centerY) >> 1; break;
+        case 14: offsetY = bottomY; break;
+        }
+        table[heightIdx][candidateIdx++] = offsetY;
+      }
+    }
+  }
+  return table;
+}
+}   // namespace
+
+const std::array<std::array<PosType, TIMD_MERGE_MAX_NONADJACENT>, MAX_CU_DEPTH - MIN_CU_LOG2 + 1>
+  g_timdMergeOffsetXTable = makeTimdMergeOffsetXTable();
+const std::array<std::array<PosType, TIMD_MERGE_MAX_NONADJACENT>, MAX_CU_DEPTH - MIN_CU_LOG2 + 1>
+  g_timdMergeOffsetYTable = makeTimdMergeOffsetYTable();
+
 //! \}

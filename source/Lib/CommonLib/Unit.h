@@ -486,6 +486,11 @@ struct CodingUnit : public UnitArea, public IntraPredictionData, public InterPre
   TimdData    timdData;
   bool        timdSadFlag;
   TimdData    timdSadData;
+  bool                     timdMergeFlag;
+  TimdData                 timdMergeData;
+  std::array<TransType, 2> timdTrType;
+  std::array<TransType, 2> timdMergeTrType;
+  int8_t                   timdMergeCandCount;
   bool        obicAvailFlag;
   bool        obicFlag;
   ObicData    obicData;

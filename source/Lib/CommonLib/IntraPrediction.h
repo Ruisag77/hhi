@@ -396,10 +396,12 @@ public:
   enum class TimdMode
   {
     Normal,
-    SAD
+    SAD,
+    Merge
   };
   void predIntraTimd(PelBuf &piPred, CodingUnit &cu, const CompArea &area, bool skipDerivation, const TimdMode timdMode,
                      const bool alreadyExecutedForNormalMode);
+  bool deriveTimdMergeMode(CodingUnit &cu, const CompArea &area);
 
   enum class TimdDerivationMethod
   {

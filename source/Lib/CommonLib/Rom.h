@@ -193,6 +193,11 @@ extern const uint8_t   g_aucIpmToTrSetModSgpm[3][11][67];
 extern const uint8_t   g_aucImplicitToTrSet[16][35];
 extern const TransType g_aucImplicitTrIdxToTr[36][2];
 
+extern const std::array<std::array<PosType, TIMD_MERGE_MAX_NONADJACENT>, MAX_CU_DEPTH - MIN_CU_LOG2 + 1>
+  g_timdMergeOffsetXTable;
+extern const std::array<std::array<PosType, TIMD_MERGE_MAX_NONADJACENT>, MAX_CU_DEPTH - MIN_CU_LOG2 + 1>
+  g_timdMergeOffsetYTable;
+
 extern const uint8_t   g_aucIpmToTrSet[16][36];
 extern const uint8_t   g_aucTrSet[80][6];
 extern const int8_t    g_aiIdLut[3][3];

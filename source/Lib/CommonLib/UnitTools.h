@@ -104,6 +104,12 @@ bool    isSameSbtSize(const uint8_t sbtInfo1, const uint8_t sbtInfo2);
 bool    getRprScaling(const SPS *sps, const PPS *curPPS, Picture *refPic, ScalingRatio &scalingRatio);
 void    checkConformanceILRP(Slice *slice);
 bool    allowTimdSad(const CodingUnit &cu);
+bool    canTimdMerge(const CodingUnit &cu);
+bool    hasTimdMergeCandidate(const CodingUnit &cu);
+int     canTimdMergeImplicitDst7(const TransformUnit &tu);
+std::array<const CodingUnit *, TIMD_MERGE_MAX_NONADJACENT> timdMergeNonAdjacentNeighbours(const CodingUnit &cu);
+const TimdData &getActiveTimdData(const CodingUnit &cu);
+const std::array<TransType, 2> &getActiveTimdTrTypes(const CodingUnit &cu);
 
 bool isObmcAllowed(const CodingUnit &cu);
 

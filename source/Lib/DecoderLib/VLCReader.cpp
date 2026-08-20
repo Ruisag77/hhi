@@ -2589,8 +2589,15 @@ void HLSyntaxReader::parseSPS(SPS *pcSPS)
   pcSPS->m_useTIMD = uiCode != 0;
   if (pcSPS->m_useTIMD)
   {
+    xReadFlag(uiCode, "sps_timd_merge_enabled_flag");
+    pcSPS->m_useTIMDMerge = uiCode != 0;
     xReadFlag(uiCode, "sps_timd_sad_enabled_flag");
     pcSPS->m_useTIMDSAD = uiCode != 0;
+  }
+  else
+  {
+    pcSPS->m_useTIMDMerge = false;
+    pcSPS->m_useTIMDSAD   = false;
   }
   xReadFlag(uiCode, "sps_eip_enabled_flag");
   pcSPS->m_useEIP = uiCode != 0;

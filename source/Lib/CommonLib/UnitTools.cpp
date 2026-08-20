@@ -43,6 +43,7 @@
 #include "Unit.h"
 #include "Slice.h"
 #include "Picture.h"
+#include "Rom.h"
 
 #include <utility>
 #include <algorithm>
@@ -279,6 +280,139 @@ bool CU::allowTimdSad(const CodingUnit &cu)
   }
 
   return cu.cs->sps->m_useTIMD;
+}
+
+const TimdData &CU::getActiveTimdData(const CodingUnit &cu)
+{
+  if (cu.timdMergeFlag)
+  {
+    return cu.timdMergeData;
+  }
+  return cu.timdSadFlag ? cu.timdSadData : cu.timdData;
+}
+
+const std::array<TransType, 2> &CU::getActiveTimdTrTypes(const CodingUnit &cu)
+{
+  return cu.timdMergeFlag ? cu.timdMergeTrType : cu.timdTrType;
+}
+
+int CU::canTimdMergeImplicitDst7(const TransformUnit &tu)
+{
+  if (!CS::isDualITree(*tu.cs))
+  {
+    return 0;
+  }
+
+  const int  width       = tu.blocks[COMP_Y].width;
+  const int  height      = tu.blocks[COMP_Y].height;
+  const bool widthDstOk  = width >= 4 && width <= 16;
+  const bool heightDstOk = height >= 4 && height <= 16;
+  return 2 * int(widthDstOk) + int(heightDstOk);
+}
+
+std::array<const CodingUnit *, TIMD_MERGE_MAX_NONADJACENT> CU::timdMergeNonAdjacentNeighbours(const CodingUnit &cu)
+{
+  std::array<const CodingUnit *, TIMD_MERGE_MAX_NONADJACENT> neighbours {};
+  const int widthIdx  = floorLog2(cu.lwidth()) - MIN_CU_LOG2;
+  const int heightIdx = floorLog2(cu.lheight()) - MIN_CU_LOG2;
+  CHECK(widthIdx < 0 || widthIdx >= int(g_timdMergeOffsetXTable.size()), "Invalid TIMD-Merge block width");
+  CHECK(heightIdx < 0 || heightIdx >= int(g_timdMergeOffsetYTable.size()), "Invalid TIMD-Merge block height");
+
+  for (size_t idx = 0; idx < neighbours.size(); idx++)
+  {
+    const int dx = g_timdMergeOffsetXTable[widthIdx][idx];
+    const int dy = g_timdMergeOffsetYTable[heightIdx][idx];
+    neighbours[idx] = cu.cs->getCURestricted(cu.lumaPos().offset(dx, dy), cu, ChannelType::LUMA);
+  }
+  return neighbours;
+}
+
+bool CU::hasTimdMergeCandidate(const CodingUnit &cu)
+{
+  if (cu.cs->pcv->isEncoder && cu.timdMergeCandCount >= 0)
+  {
+    return cu.timdMergeCandCount > 0;
+  }
+
+  const auto isCandidate = [](const CodingUnit *neighbour)
+  { return neighbour && CU::isIntra(*neighbour) && neighbour->timdFlag; };
+
+  constexpr int step = 4;
+  const CodingUnit *cuLeft = nullptr;
+  for (int y = 0; y <= cu.lheight(); y += step)
+  {
+    cuLeft = cu.cs->getCURestricted(cu.lumaPos().offset(-1, y), cu, ChannelType::LUMA);
+    if (isCandidate(cuLeft))
+    {
+      return true;
+    }
+  }
+
+  const CodingUnit *cuTop = nullptr;
+  for (int x = 0; x <= cu.lwidth(); x += step)
+  {
+    cuTop = cu.cs->getCURestricted(cu.lumaPos().offset(x, -1), cu, ChannelType::LUMA);
+    if (isCandidate(cuTop))
+    {
+      return true;
+    }
+  }
+
+  if (isCandidate(cu.cs->getCURestricted(cu.lumaPos().offset(-1, -1), cu, ChannelType::LUMA)))
+  {
+    return true;
+  }
+
+  const CodingUnit *cuLeft2 = cuLeft
+    ? cu.cs->getCURestricted(cuLeft->lumaPos().offset(cuLeft->lwidth() - 1, cuLeft->lheight()), cu,
+                             ChannelType::LUMA)
+    : nullptr;
+  const CodingUnit *cuTop2 = cuTop
+    ? cu.cs->getCURestricted(cuTop->lumaPos().offset(cuTop->lwidth(), cuTop->lheight() - 1), cu, ChannelType::LUMA)
+    : nullptr;
+  if (isCandidate(cuLeft2) || isCandidate(cuTop2))
+  {
+    return true;
+  }
+
+  const CodingUnit *cuLeft3 = cuLeft2
+    ? cu.cs->getCURestricted(cuLeft2->lumaPos().offset(cuLeft2->lwidth() - 1, cuLeft2->lheight()), cu,
+                             ChannelType::LUMA)
+    : nullptr;
+  const CodingUnit *cuTop3 = cuTop2
+    ? cu.cs->getCURestricted(cuTop2->lumaPos().offset(cuTop2->lwidth(), cuTop2->lheight() - 1), cu,
+                             ChannelType::LUMA)
+    : nullptr;
+  if (isCandidate(cuLeft3) || isCandidate(cuTop3))
+  {
+    return true;
+  }
+
+  for (const CodingUnit *neighbour: CU::timdMergeNonAdjacentNeighbours(cu))
+  {
+    if (isCandidate(neighbour))
+    {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool CU::canTimdMerge(const CodingUnit &cu)
+{
+  // TIMD-Merge inherits a transform and therefore cannot use the transform skip required by lossless coding.
+  if (!cu.cs->sps->m_useTIMDMerge || !cu.cs->sps->m_useTIMD || cu.predMode != MODE_INTRA ||
+      !isLuma(cu.chType) || !cu.Y().valid() || cu.bdpcmMode[0] != BdpcmMode::NONE || cu.slice->m_isLossless)
+  {
+    return false;
+  }
+
+  const int area = cu.Y().area();
+  if (area <= 16 || (area > 1024 && cu.slice->isIntra()))
+  {
+    return false;
+  }
+  return CU::hasTimdMergeCandidate(cu);
 }
 
 bool CU::isSameSlice(const CodingUnit &cu, const CodingUnit &cu2)
@@ -10247,6 +10381,7 @@ bool TU::isTSAllowed(const TransformUnit &tu, const CompID &compID)
   bool tsAllowed = tu.cs->sps->m_transformSkipEnabledFlag;
   tsAllowed &= tu.blocks[compID].width <= transformSkipMaxSize && tu.blocks[compID].height <= transformSkipMaxSize;
   tsAllowed &= !tu.cu->sbtInfo;
+  tsAllowed &= !tu.cu->timdMergeFlag;
 
   return tsAllowed;
 }
@@ -10262,6 +10397,7 @@ bool TU::isMTSAllowed(const TransformUnit &tu, const CompID &compID)
   mtsAllowed &= CU::isIntra(*tu.cu) ? tu.cs->sps->m_explicitMtsIntra : tu.cs->sps->m_explicitMtsInter;
   mtsAllowed &= cuWidth <= maxSize && cuHeight <= maxSize;
   mtsAllowed &= !tu.cu->sbtInfo;
+  mtsAllowed &= !tu.cu->timdMergeFlag;
   mtsAllowed &= !(tu.cu->bdpcmMode[0] != BdpcmMode::NONE && cuWidth <= tsMaxSize && cuHeight <= tsMaxSize);
   return mtsAllowed;
 }

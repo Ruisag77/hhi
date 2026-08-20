@@ -360,6 +360,7 @@ struct SPS
   bool                 m_useDIMD { false };
   bool                 m_useDIMDChroma { false };
   bool                 m_useTIMD { false };
+  bool                 m_useTIMDMerge { false };
   bool                 m_useTIMDSAD { false };
   bool                 m_useOBIC { false };
   bool                 m_useEIP { false };

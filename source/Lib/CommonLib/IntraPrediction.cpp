@@ -1324,7 +1324,15 @@ void IntraPrediction::predIntraTimd(PelBuf &piPred, CodingUnit &cu, const CompAr
 {
   if (!skipDerivation)
   {
-    if (timdMode == TimdMode::Normal)
+    if (timdMode == TimdMode::Merge)
+    {
+      CHECK(alreadyExecutedForNormalMode, "Normal TIMD reuse is not applicable to TIMD-Merge");
+      CHECK(!deriveTimdMergeMode(cu, area), "No valid TIMD-Merge candidate");
+      cu.derivedIpm[0] = int8_t(MAP131TO67(cu.timdMergeData.blendMode[0]));
+      cu.derivedIpm[1] = cu.timdMergeData.isBlend ? int8_t(MAP131TO67(cu.timdMergeData.blendMode[1]))
+                                                  : cu.derivedIpm[0];
+    }
+    else if (timdMode == TimdMode::Normal)
     {
       CHECK(alreadyExecutedForNormalMode, "Flag only relevant for SAD Mode");
 
@@ -1350,7 +1358,9 @@ void IntraPrediction::predIntraTimd(PelBuf &piPred, CodingUnit &cu, const CompAr
 
   PROFILER_SCOPE(1, g_timeProfiler, P_INTRA_EST_CAND_LUMA_TIMD);
 
-  const auto &timdData = (timdMode == TimdMode::Normal ? cu.timdData : cu.timdSadData);
+  const auto &timdData = timdMode == TimdMode::Merge ? cu.timdMergeData
+    : timdMode == TimdMode::SAD                    ? cu.timdSadData
+                                                   : cu.timdData;
 
   // Do First Prediction
   int            width  = piPred.width;
@@ -3987,6 +3997,250 @@ static_vector<unsigned, NUM_MOST_PROBABLE_MODES + 3>
   }
 
   return mpmExtraList;
+}
+
+bool IntraPrediction::deriveTimdMergeMode(CodingUnit &cu, const CompArea &area)
+{
+  struct TimdMergeCandidate
+  {
+    TimdData                 data {};
+    std::array<TransType, 2> trType { TransType::DCT2, TransType::DCT2 };
+  };
+
+  cu.timdMergeData      = {};
+  cu.timdMergeTrType    = { TransType::DCT2, TransType::DCT2 };
+  cu.timdMergeCandCount = 0;
+
+  const auto templateInfo = CU::deriveTimdRefTypePositionAndSize(cu, 1, 1);
+  if (!cu.cs->sps->m_useTIMD || templateInfo.eTemplateType == NO_NEIGHBOR)
+  {
+    return false;
+  }
+
+  static_vector<const CodingUnit *, NUM_TIMD_MERGE_CUS> neighbours;
+  const auto appendNeighbour = [&neighbours](const CodingUnit *neighbour, size_t limit)
+  {
+    if (neighbour && CU::isIntra(*neighbour) && neighbour->timdFlag && neighbours.size() < limit)
+    {
+      neighbours.push_back(neighbour);
+    }
+  };
+
+  constexpr int step = 4;
+  const CodingUnit *cuLeft = nullptr;
+  for (int y = 0; y <= cu.lheight(); y += step)
+  {
+    cuLeft = cu.cs->getCURestricted(cu.lumaPos().offset(-1, y), cu, ChannelType::LUMA);
+    appendNeighbour(cuLeft, NUM_TIMD_MERGE_CUS - 1);
+  }
+
+  const CodingUnit *cuTop = nullptr;
+  for (int x = 0; x <= cu.lwidth(); x += step)
+  {
+    cuTop = cu.cs->getCURestricted(cu.lumaPos().offset(x, -1), cu, ChannelType::LUMA);
+    appendNeighbour(cuTop, NUM_TIMD_MERGE_CUS - 1);
+  }
+
+  appendNeighbour(cu.cs->getCURestricted(cu.lumaPos().offset(-1, -1), cu, ChannelType::LUMA),
+                  NUM_TIMD_MERGE_CUS - 1);
+
+  const CodingUnit *cuLeft2 = cuLeft
+    ? cu.cs->getCURestricted(cuLeft->lumaPos().offset(cuLeft->lwidth() - 1, cuLeft->lheight()), cu,
+                             ChannelType::LUMA)
+    : nullptr;
+  const CodingUnit *cuTop2 = cuTop
+    ? cu.cs->getCURestricted(cuTop->lumaPos().offset(cuTop->lwidth(), cuTop->lheight() - 1), cu, ChannelType::LUMA)
+    : nullptr;
+  appendNeighbour(cuLeft2, NUM_TIMD_MERGE_CUS - 1);
+  appendNeighbour(cuTop2, NUM_TIMD_MERGE_CUS - 1);
+  appendNeighbour(cuLeft2
+                    ? cu.cs->getCURestricted(cuLeft2->lumaPos().offset(cuLeft2->lwidth() - 1, cuLeft2->lheight()), cu,
+                                             ChannelType::LUMA)
+                    : nullptr,
+                  NUM_TIMD_MERGE_CUS - 1);
+  appendNeighbour(cuTop2
+                    ? cu.cs->getCURestricted(cuTop2->lumaPos().offset(cuTop2->lwidth(), cuTop2->lheight() - 1), cu,
+                                             ChannelType::LUMA)
+                    : nullptr,
+                  NUM_TIMD_MERGE_CUS - 1);
+
+  for (const CodingUnit *neighbour: CU::timdMergeNonAdjacentNeighbours(cu))
+  {
+    appendNeighbour(neighbour, NUM_TIMD_MERGE_CUS);
+  }
+
+  static_vector<const CodingUnit *, NUM_TIMD_MERGE_CUS> uniqueNeighbours;
+  for (const CodingUnit *neighbour: neighbours)
+  {
+    bool duplicate = false;
+    for (const CodingUnit *previous: uniqueNeighbours)
+    {
+      if (neighbour->lx() == previous->lx() && neighbour->ly() == previous->ly())
+      {
+        duplicate = true;
+        break;
+      }
+    }
+    if (!duplicate)
+    {
+      uniqueNeighbours.push_back(neighbour);
+    }
+  }
+
+  static_vector<size_t, NUM_TIMD_MERGE_CUS> distanceOrder;
+  static_vector<int, NUM_TIMD_MERGE_CUS>    distances;
+  for (size_t idx = 0; idx < uniqueNeighbours.size(); idx++)
+  {
+    distanceOrder.push_back(idx);
+    distances.push_back(abs(cu.lx() - uniqueNeighbours[idx]->lx()) + abs(cu.ly() - uniqueNeighbours[idx]->ly()));
+  }
+  std::sort(distanceOrder.begin(), distanceOrder.end(), [&distances](size_t lhs, size_t rhs)
+  { return distances[lhs] < distances[rhs] || (distances[lhs] == distances[rhs] && lhs < rhs); });
+
+  static_vector<const CodingUnit *, NUM_TIMD_MERGE_CUS> nearestNeighbours;
+  const size_t numNearest = std::min<size_t>(5, uniqueNeighbours.size());
+  // Keep the proposal's original scan order among the five nearest neighbours.
+  for (size_t originalIdx = 0; originalIdx < uniqueNeighbours.size() && nearestNeighbours.size() < numNearest;
+       originalIdx++)
+  {
+    for (size_t sortedIdx = 0; sortedIdx < numNearest; sortedIdx++)
+    {
+      if (distanceOrder[sortedIdx] == originalIdx)
+      {
+        nearestNeighbours.push_back(uniqueNeighbours[originalIdx]);
+        break;
+      }
+    }
+  }
+  cu.timdMergeCandCount = int8_t(nearestNeighbours.size());
+
+  static_vector<TimdMergeCandidate, NUM_TIMD_MERGE_CUS> candidates;
+  for (const CodingUnit *neighbour: nearestNeighbours)
+  {
+    // This also propagates an already merged predictor and the active TIMD-SAD predictor.
+    const TimdData &data = CU::getActiveTimdData(*neighbour);
+    bool duplicate = false;
+    for (const auto &candidate: candidates)
+    {
+      if (candidate.data.blendMode[0] == data.blendMode[0] && candidate.data.blendMode[1] == data.blendMode[1])
+      {
+        duplicate = true;
+        break;
+      }
+    }
+    if (duplicate)
+    {
+      continue;
+    }
+
+    TimdMergeCandidate candidate;
+    candidate.data   = data;
+    candidate.trType = CS::isDualITree(*cu.cs)
+      ? CU::getActiveTimdTrTypes(*neighbour)
+      : std::array<TransType, 2> { TransType::DCT2, TransType::DCT2 };
+    candidates.push_back(candidate);
+  }
+
+  if (candidates.empty())
+  {
+    return false;
+  }
+
+  int selectedCandidate = 0;
+  if (candidates.size() > 1)
+  {
+    constexpr int templateWidth  = 1;
+    constexpr int templateHeight = 1;
+    const auto [iRefX, iRefY]            = templateInfo.iRefPosition;
+    const auto [uiRefWidth, uiRefHeight] = templateInfo.uiRefSize;
+    const auto templateType              = templateInfo.eTemplateType;
+    const uint32_t realWidth = uiRefWidth + (templateType == LEFT_NEIGHBOR ? templateWidth : 0);
+    const uint32_t realHeight = uiRefHeight + (templateType == ABOVE_NEIGHBOR ? templateHeight : 0);
+    const ptrdiff_t predStride = MAX_CU_SIZE + 1;
+    std::vector<Pel> predStorage(size_t(predStride) * (MAX_CU_SIZE + 1));
+    Pel *pred = predStorage.data();
+
+    const CodingStructure &cs = *cu.cs;
+    Pel *org = cs.picture->getRecoBuf(area).buf;
+    const ptrdiff_t orgStride = cs.picture->getRecoBuf(area).stride;
+    org += (iRefY - cu.ly()) * orgStride + (iRefX - cu.lx());
+
+    DistParam distParam[2];
+    distParam[0].applyWeight = false;
+    distParam[0].useMR       = false;
+    distParam[1].applyWeight = false;
+    distParam[1].useMR       = false;
+    const int bitDepth = cu.slice->m_sps->m_bitDepths[ChannelType::LUMA];
+    if (templateType == LEFT_ABOVE_NEIGHBOR)
+    {
+      m_timdSatdCost->setTimdDistParam(distParam[0], org + templateWidth, pred + templateWidth, orgStride,
+                                       predStride, bitDepth, COMP_Y, cu.lwidth(), templateHeight, 0, 1, false);
+      m_timdSatdCost->setTimdDistParam(distParam[1], org + templateHeight * orgStride,
+                                       pred + templateHeight * predStride, orgStride, predStride, bitDepth, COMP_Y,
+                                       templateWidth, cu.lheight(), 0, 1, false);
+    }
+    else if (templateType == LEFT_NEIGHBOR)
+    {
+      m_timdSatdCost->setTimdDistParam(distParam[1], org, pred, orgStride, predStride, bitDepth, COMP_Y,
+                                       templateWidth, cu.lheight(), 0, 1, false);
+    }
+    else
+    {
+      m_timdSatdCost->setTimdDistParam(distParam[0], org, pred, orgStride, predStride, bitDepth, COMP_Y, cu.lwidth(),
+                                       templateHeight, 0, 1, false);
+    }
+
+    m_ipaParam.multiRefIndex = templateWidth;
+    initTimdIntraPatternLuma(cu, area, templateType != ABOVE_NEIGHBOR ? templateWidth : 0,
+                             templateType != LEFT_NEIGHBOR ? templateHeight : 0, uiRefWidth, uiRefHeight);
+
+    std::array<bool, EXT_VDIA_IDX + 1> modeCostValid {};
+    std::array<uint64_t, EXT_VDIA_IDX + 1> modeCost;
+    modeCost.fill(MAX_UINT64);
+    const auto getModeCost = [&](int mode)
+    {
+      CHECK(mode < 0 || mode > EXT_VDIA_IDX, "Invalid TIMD-Merge mode");
+      if (!modeCostValid[mode])
+      {
+        initPredTimdIntraParams(cu, area, mode, false);
+        predTimdIntraAng(COMP_Y, cu, mode, pred, predStride, realWidth, realHeight, templateType,
+                         templateType == ABOVE_NEIGHBOR ? 0 : templateWidth,
+                         templateType == LEFT_NEIGHBOR ? 0 : templateHeight);
+        uint64_t cost = 0;
+        if (templateType != LEFT_NEIGHBOR)
+        {
+          cost += distParam[0].distFunc(distParam[0]);
+        }
+        if (templateType != ABOVE_NEIGHBOR)
+        {
+          cost += distParam[1].distFunc(distParam[1]);
+        }
+        modeCost[mode]      = cost;
+        modeCostValid[mode] = true;
+      }
+      return modeCost[mode];
+    };
+
+    static_vector<int, NUM_TIMD_MERGE_MODES + 1>    bestCandidates;
+    static_vector<double, NUM_TIMD_MERGE_MODES + 1> bestCosts;
+    for (int idx = 0; idx < int(candidates.size()); idx++)
+    {
+      // As in the proposal, candidate ranking uses the primary mode's template cost only.
+      updateCandList(idx, double(getModeCost(candidates[idx].data.blendMode[0])), bestCandidates, bestCosts,
+                     NUM_TIMD_MERGE_MODES + 1);
+    }
+    // Preserve the proposal's near-tie rule, which deliberately promotes the second candidate.
+    if (bestCandidates.size() > 1 && bestCosts[1] < 1.1 * bestCosts[0])
+    {
+      std::swap(bestCandidates[0], bestCandidates[1]);
+      std::swap(bestCosts[0], bestCosts[1]);
+    }
+    selectedCandidate = bestCandidates[0];
+  }
+
+  cu.timdMergeData   = candidates[selectedCandidate].data;
+  cu.timdMergeTrType = candidates[selectedCandidate].trType;
+  return true;
 }
 
 int IntraPrediction::deriveTimdMode(const CPelBuf &recoBuf, const CompArea &area, CodingUnit &cu,

@@ -1787,6 +1787,7 @@ void EncLib::xInitSPS(SPS &sps)
   sps.m_useDIMD                    = m_encCfg.m_DIMD;
   sps.m_useDIMDChroma              = m_encCfg.m_DIMDChroma;
   sps.m_useTIMD                    = m_encCfg.m_TIMD;
+  sps.m_useTIMDMerge               = m_encCfg.m_TIMD;
   sps.m_useTIMDSAD                 = m_encCfg.m_TIMDSAD;
   sps.m_useOBIC                    = m_encCfg.m_OBIC;
   sps.m_useEIP                     = m_encCfg.m_EIP;

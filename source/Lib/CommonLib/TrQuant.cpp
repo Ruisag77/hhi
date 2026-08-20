@@ -949,6 +949,14 @@ void TrQuant::getTrTypes(const TransformUnit &tu, const CompID compID, TransType
   trTypeHor = TransType::DCT2;
   trTypeVer = TransType::DCT2;
 
+  if (isLuma(compID) && tu.cu->timdMergeFlag && !TU::getNstIdx(tu, compID))
+  {
+    const int implicitDst7 = CU::canTimdMergeImplicitDst7(tu);
+    trTypeHor = (implicitDst7 & 2) ? TransType::DST7 : tu.cu->timdMergeTrType[0];
+    trTypeVer = (implicitDst7 & 1) ? TransType::DST7 : tu.cu->timdMergeTrType[1];
+    return;
+  }
+
   if (isSBT && isNST(tu.mtsIdx[compID]))
   {
     return;
