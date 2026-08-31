@@ -46,6 +46,23 @@
 //! \{
 
 class EncCu;
+
+struct TimdMergeFlagFracBitsStats
+{
+  uint64_t coded { 0 };
+  uint64_t zero { 0 };
+  uint64_t one { 0 };
+  uint64_t fracBits { 0 };
+  uint64_t zeroFracBits { 0 };
+  uint64_t oneFracBits { 0 };
+  uint64_t ctxCoded[2] { 0, 0 };
+  uint64_t ctxZero[2] { 0, 0 };
+  uint64_t ctxOne[2] { 0, 0 };
+  uint64_t ctxFracBits[2] { 0, 0 };
+  uint64_t ctxZeroFracBits[2] { 0, 0 };
+  uint64_t ctxOneFracBits[2] { 0, 0 };
+};
+
 class CABACWriter : public DeriveCtx
 {
 public:
@@ -86,6 +103,16 @@ public:
   void                  setBinBuffer(BinStoreVector *bb) { m_binEncoder.setBinBuffer(bb); }
   const BinStoreVector *getBinBuffer() const { return m_binEncoder.getBinBuffer(); }
   void                  updateCtxs(BinStoreVector *bb) { m_binEncoder.updateCtxs(bb); }
+  void setTimdMergeFlagFracBitsTracking(bool enabled)
+  {
+    m_trackTimdMergeFlagFracBits = enabled;
+    resetTimdMergeFlagFracBitsStats();
+  }
+  void resetTimdMergeFlagFracBitsStats() { m_timdMergeFlagFracBitsStats = {}; }
+  const TimdMergeFlagFracBitsStats &getTimdMergeFlagFracBitsStats() const
+  {
+    return m_timdMergeFlagFracBitsStats;
+  }
 
 public:
   // slice segment data (clause 7.3.8.1)
@@ -267,6 +294,8 @@ private:
   Ctx              m_testCtx;
   EncCu           *m_encCu;
   ScanElement     *m_scanOrder;
+  bool             m_trackTimdMergeFlagFracBits { false };
+  TimdMergeFlagFracBitsStats m_timdMergeFlagFracBitsStats;
 };
 
 class CABACEncoder

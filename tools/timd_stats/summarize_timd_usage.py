@@ -39,7 +39,28 @@ COUNT_FIELDS: Tuple[str, ...] = (
     "timd_merge_flag_coded_samples",
     "timd_merge_flag_zero_samples",
     "timd_merge_flag_one_samples",
+    "timd_merge_flag_ctx0_coded",
+    "timd_merge_flag_ctx0_zero",
+    "timd_merge_flag_ctx0_one",
+    "timd_merge_flag_ctx1_coded",
+    "timd_merge_flag_ctx1_zero",
+    "timd_merge_flag_ctx1_one",
 )
+
+FRAC_BITS_FIELDS: Tuple[str, ...] = (
+    "timd_merge_flag_frac_bits",
+    "timd_merge_flag_zero_frac_bits",
+    "timd_merge_flag_one_frac_bits",
+    "timd_merge_flag_ctx0_frac_bits",
+    "timd_merge_flag_ctx0_zero_frac_bits",
+    "timd_merge_flag_ctx0_one_frac_bits",
+    "timd_merge_flag_ctx1_frac_bits",
+    "timd_merge_flag_ctx1_zero_frac_bits",
+    "timd_merge_flag_ctx1_one_frac_bits",
+)
+
+SUM_FIELDS: Tuple[str, ...] = COUNT_FIELDS + FRAC_BITS_FIELDS
+FRAC_BITS_SCALE = 1 << 15
 
 IDENTITY_FIELDS: Tuple[str, ...] = (
     "sequence",
@@ -87,6 +108,11 @@ def parse_args() -> argparse.Namespace:
         default="22,27,32,37",
         help="comma-separated QPs expected for each sequence; missing QPs are warnings (default: 22,27,32,37)",
     )
+    parser.add_argument(
+        "--combined-name",
+        default="timd_usage_summary.csv",
+        help="filename of the combined all-sequence/all-QP CSV (default: timd_usage_summary.csv)",
+    )
     return parser.parse_args()
 
 
@@ -108,13 +134,13 @@ def read_shards(shard_root: Path) -> List[Dict[str, object]]:
             reader = csv.DictReader(stream)
             if reader.fieldnames is None:
                 raise ValueError(f"{path}: missing CSV header")
-            required = set(IDENTITY_FIELDS) | set(COUNT_FIELDS) | {"schema_version", "bitstream"}
+            required = set(IDENTITY_FIELDS) | set(SUM_FIELDS) | {"schema_version", "bitstream"}
             missing = required - set(reader.fieldnames)
             if missing:
                 raise ValueError(f"{path}: missing fields: {', '.join(sorted(missing))}")
 
             for line, raw in enumerate(reader, start=2):
-                if as_int(raw, "schema_version", path, line) != 2:
+                if as_int(raw, "schema_version", path, line) != 3:
                     raise ValueError(f"{path}:{line}: unsupported schema_version")
 
                 row: Dict[str, object] = {
@@ -123,7 +149,7 @@ def read_shards(shard_root: Path) -> List[Dict[str, object]]:
                     "bitstream": raw["bitstream"],
                     "source_path": str(path),
                 }
-                for field in ("qp", "layer_id", "frame_skip", "poc", "source_frame") + COUNT_FIELDS:
+                for field in ("qp", "layer_id", "frame_skip", "poc", "source_frame") + SUM_FIELDS:
                     row[field] = as_int(raw, field, path, line)
 
                 category_total = (
@@ -166,12 +192,35 @@ def read_shards(shard_root: Path) -> List[Dict[str, object]]:
                     int(row["timd_merge_not_selected_samples"]) + int(row["timd_merge_samples"])
                 ):
                     raise ValueError(f"{path}:{line}: available merge samples do not split into lost and selected")
+                if int(row["timd_merge_flag_frac_bits"]) != (
+                    int(row["timd_merge_flag_zero_frac_bits"])
+                    + int(row["timd_merge_flag_one_frac_bits"])
+                ):
+                    raise ValueError(f"{path}:{line}: merge-flag fractional bits do not equal zero plus one")
+                for ctx_id in (0, 1):
+                    prefix = f"timd_merge_flag_ctx{ctx_id}"
+                    if int(row[f"{prefix}_coded"]) != (
+                        int(row[f"{prefix}_zero"]) + int(row[f"{prefix}_one"])
+                    ):
+                        raise ValueError(f"{path}:{line}: ctx{ctx_id} flags do not equal zero plus one")
+                    if int(row[f"{prefix}_frac_bits"]) != (
+                        int(row[f"{prefix}_zero_frac_bits"])
+                        + int(row[f"{prefix}_one_frac_bits"])
+                    ):
+                        raise ValueError(
+                            f"{path}:{line}: ctx{ctx_id} fractional bits do not equal zero plus one"
+                        )
+                for suffix in ("coded", "zero", "one", "frac_bits", "zero_frac_bits", "one_frac_bits"):
+                    total_field = f"timd_merge_flag_{suffix}"
+                    ctx_total = sum(int(row[f"timd_merge_flag_ctx{ctx_id}_{suffix}"]) for ctx_id in (0, 1))
+                    if int(row[total_field]) != ctx_total:
+                        raise ValueError(f"{path}:{line}: {total_field} does not equal ctx0 plus ctx1")
                 rows.append(row)
     return rows
 
 
 def measurement_signature(row: Mapping[str, object]) -> Tuple[int, ...]:
-    return tuple(int(row[field]) for field in COUNT_FIELDS)
+    return tuple(int(row[field]) for field in SUM_FIELDS)
 
 
 def select_rows(
@@ -205,15 +254,70 @@ def select_rows(
 
 
 def sum_fields(rows: Iterable[Mapping[str, object]]) -> Dict[str, int]:
-    totals = {field: 0 for field in COUNT_FIELDS}
+    totals = {field: 0 for field in SUM_FIELDS}
     for row in rows:
-        for field in COUNT_FIELDS:
+        for field in SUM_FIELDS:
             totals[field] += int(row[field])
     return totals
 
 
 def ratio(numerator: int, denominator: int) -> str:
     return f"{numerator / denominator:.10f}" if denominator else "0.0000000000"
+
+
+def frac_bits_to_bits(frac_bits: int) -> str:
+    return f"{frac_bits / FRAC_BITS_SCALE:.10f}"
+
+
+def fractional_bit_summary(totals: Mapping[str, int]) -> Dict[str, object]:
+    output: Dict[str, object] = {
+        "timd_merge_flag_estimated_bits": frac_bits_to_bits(totals["timd_merge_flag_frac_bits"]),
+        "timd_merge_flag_zero_estimated_bits": frac_bits_to_bits(
+            totals["timd_merge_flag_zero_frac_bits"]
+        ),
+        "timd_merge_flag_one_estimated_bits": frac_bits_to_bits(
+            totals["timd_merge_flag_one_frac_bits"]
+        ),
+        "timd_merge_flag_avg_estimated_bits_per_bin": ratio(
+            totals["timd_merge_flag_frac_bits"], totals["timd_merge_flag_coded"] * FRAC_BITS_SCALE
+        ),
+        "timd_merge_flag_zero_avg_estimated_bits_per_bin": ratio(
+            totals["timd_merge_flag_zero_frac_bits"],
+            totals["timd_merge_flag_zero"] * FRAC_BITS_SCALE,
+        ),
+        "timd_merge_flag_one_avg_estimated_bits_per_bin": ratio(
+            totals["timd_merge_flag_one_frac_bits"],
+            totals["timd_merge_flag_one"] * FRAC_BITS_SCALE,
+        ),
+        "timd_merge_flag_estimated_bits_per_luma_cu": ratio(
+            totals["timd_merge_flag_frac_bits"], totals["luma_cus"] * FRAC_BITS_SCALE
+        ),
+        "timd_merge_flag_zero_estimated_bits_per_luma_cu": ratio(
+            totals["timd_merge_flag_zero_frac_bits"], totals["luma_cus"] * FRAC_BITS_SCALE
+        ),
+    }
+    for ctx_id in (0, 1):
+        prefix = f"timd_merge_flag_ctx{ctx_id}"
+        output.update(
+            {
+                f"{prefix}_coded": totals[f"{prefix}_coded"],
+                f"{prefix}_zero": totals[f"{prefix}_zero"],
+                f"{prefix}_one": totals[f"{prefix}_one"],
+                f"{prefix}_estimated_bits": frac_bits_to_bits(totals[f"{prefix}_frac_bits"]),
+                f"{prefix}_zero_estimated_bits": frac_bits_to_bits(totals[f"{prefix}_zero_frac_bits"]),
+                f"{prefix}_one_estimated_bits": frac_bits_to_bits(totals[f"{prefix}_one_frac_bits"]),
+                f"{prefix}_avg_estimated_bits_per_bin": ratio(
+                    totals[f"{prefix}_frac_bits"], totals[f"{prefix}_coded"] * FRAC_BITS_SCALE
+                ),
+                f"{prefix}_zero_avg_estimated_bits_per_bin": ratio(
+                    totals[f"{prefix}_zero_frac_bits"], totals[f"{prefix}_zero"] * FRAC_BITS_SCALE
+                ),
+                f"{prefix}_one_avg_estimated_bits_per_bin": ratio(
+                    totals[f"{prefix}_one_frac_bits"], totals[f"{prefix}_one"] * FRAC_BITS_SCALE
+                ),
+            }
+        )
+    return output
 
 
 def atomic_write_csv(path: Path, fieldnames: Sequence[str], rows: Iterable[Mapping[str, object]]) -> None:
@@ -226,18 +330,8 @@ def atomic_write_csv(path: Path, fieldnames: Sequence[str], rows: Iterable[Mappi
     os.replace(temporary, path)
 
 
-def write_summary(
-    output_root: Path,
-    sequence: str,
-    qp: int,
-    rows: Sequence[Mapping[str, object]],
-    keep_overlaps: bool,
-) -> Path:
-    selected, unique_frames, overlap_rows, conflicts = select_rows(rows, keep_overlaps)
-    totals = sum_fields(selected)
-    shard_count = len({str(row["source_path"]) for row in rows})
-
-    fieldnames = (
+def summary_fieldnames() -> Tuple[str, ...]:
+    common = (
         "sequence",
         "qp",
         "mode",
@@ -269,8 +363,46 @@ def write_summary(
         "timd_merge_flag_zero_share",
         "timd_merge_flag_zero_frequency_all_luma_cus",
         "timd_merge_flag_zero_share_of_normal_timd",
+        "timd_merge_flag_estimated_bits",
+        "timd_merge_flag_zero_estimated_bits",
+        "timd_merge_flag_one_estimated_bits",
+        "timd_merge_flag_avg_estimated_bits_per_bin",
+        "timd_merge_flag_zero_avg_estimated_bits_per_bin",
+        "timd_merge_flag_one_avg_estimated_bits_per_bin",
+        "timd_merge_flag_estimated_bits_per_luma_cu",
+        "timd_merge_flag_zero_estimated_bits_per_luma_cu",
     )
+    context_fields: List[str] = []
+    for ctx_id in (0, 1):
+        prefix = f"timd_merge_flag_ctx{ctx_id}"
+        context_fields.extend(
+            (
+                f"{prefix}_coded",
+                f"{prefix}_zero",
+                f"{prefix}_one",
+                f"{prefix}_estimated_bits",
+                f"{prefix}_zero_estimated_bits",
+                f"{prefix}_one_estimated_bits",
+                f"{prefix}_avg_estimated_bits_per_bin",
+                f"{prefix}_zero_avg_estimated_bits_per_bin",
+                f"{prefix}_one_avg_estimated_bits_per_bin",
+            )
+        )
+    return common + tuple(context_fields)
 
+
+def write_summary(
+    output_root: Path,
+    sequence: str,
+    qp: int,
+    rows: Sequence[Mapping[str, object]],
+    keep_overlaps: bool,
+) -> Tuple[Path, List[MutableMapping[str, object]]]:
+    selected, unique_frames, overlap_rows, conflicts = select_rows(rows, keep_overlaps)
+    totals = sum_fields(selected)
+    shard_count = len({str(row["source_path"]) for row in rows})
+
+    bit_summary = fractional_bit_summary(totals)
     output_rows: List[MutableMapping[str, object]] = []
     for mode, cu_field, sample_field in MODE_FIELDS:
         cu_count = totals[cu_field]
@@ -316,18 +448,19 @@ def write_summary(
                 "timd_merge_flag_zero_share_of_normal_timd": ratio(
                     totals["timd_merge_flag_zero"], totals["timd_normal"]
                 ),
+                **bit_summary,
             }
         )
 
     output_path = output_root / sequence / f"QP{qp}.csv"
-    atomic_write_csv(output_path, fieldnames, output_rows)
+    atomic_write_csv(output_path, summary_fieldnames(), output_rows)
     print(
         f"{sequence:24s} QP{qp:>2}: frames={len(selected):>4}, "
         f"TIMD={totals['timd_normal']:>8}, TIMDSAD={totals['timdsad']:>8}, "
         f"TIMDMerge={totals['timd_merge']:>8}, merge_flag_0={totals['timd_merge_flag_zero']:>8}, "
         f"overlaps_removed={overlap_rows}, conflicts={conflicts}"
     )
-    return output_path
+    return output_path, output_rows
 
 
 def parse_expected_qps(value: str) -> set[int]:
@@ -355,8 +488,14 @@ def main() -> int:
         groups[(str(row["sequence"]), int(row["qp"]))].append(row)
 
     written: List[Path] = []
+    combined_rows: List[MutableMapping[str, object]] = []
     for (sequence, qp), group_rows in sorted(groups.items()):
-        written.append(write_summary(output_root, sequence, qp, group_rows, args.keep_overlaps))
+        output_path, output_rows = write_summary(output_root, sequence, qp, group_rows, args.keep_overlaps)
+        written.append(output_path)
+        combined_rows.extend(output_rows)
+
+    combined_path = output_root / args.combined_name
+    atomic_write_csv(combined_path, summary_fieldnames(), combined_rows)
 
     if expected_qps:
         sequences = sorted({sequence for sequence, _ in groups})
@@ -369,7 +508,8 @@ def main() -> int:
                     file=sys.stderr,
                 )
 
-    print(f"wrote {len(written)} summary files below {output_root}")
+    print(f"wrote {len(written)} per-QP summary files below {output_root}")
+    print(f"wrote combined summary: {combined_path}")
     return 0
 
 

@@ -83,6 +83,15 @@ struct TimdUsageRecord
   uint64_t timdMergeFlagCodedSamples { 0 };
   uint64_t timdMergeFlagZeroSamples { 0 };
   uint64_t timdMergeFlagOneSamples { 0 };
+  uint64_t timdMergeFlagFracBits { 0 };
+  uint64_t timdMergeFlagZeroFracBits { 0 };
+  uint64_t timdMergeFlagOneFracBits { 0 };
+  uint64_t timdMergeFlagCtxCoded[2] { 0, 0 };
+  uint64_t timdMergeFlagCtxZero[2] { 0, 0 };
+  uint64_t timdMergeFlagCtxOne[2] { 0, 0 };
+  uint64_t timdMergeFlagCtxFracBits[2] { 0, 0 };
+  uint64_t timdMergeFlagCtxZeroFracBits[2] { 0, 0 };
+  uint64_t timdMergeFlagCtxOneFracBits[2] { 0, 0 };
 };
 
 // ====================================================================================================================

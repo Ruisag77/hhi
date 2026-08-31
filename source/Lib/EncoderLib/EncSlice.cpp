@@ -156,6 +156,7 @@ void EncSlice::xPrepareTimdUsageStats()
   m_timdUsageShardPath.clear();
   m_timdUsageStatsPrepared = false;
   m_timdUsageStatsWritten  = false;
+  m_CABACWriter->setTimdMergeFlagFracBitsTracking(false);
 
   if (!m_encCfg || !m_encCfg->m_timdUsageStats)
   {
@@ -205,6 +206,7 @@ void EncSlice::xPrepareTimdUsageStats()
   fs::remove(tempPath, error);
   m_timdUsageShardPath     = shardPath.string();
   m_timdUsageStatsPrepared = true;
+  m_CABACWriter->setTimdMergeFlagFracBitsTracking(true);
 }
 
 void EncSlice::xAccumulateTimdUsageStats(const CodingStructure &cs, const UnitArea &ctuArea, const int poc)
@@ -216,6 +218,9 @@ void EncSlice::xAccumulateTimdUsageStats(const CodingStructure &cs, const UnitAr
 
   TimdUsageRecord &record = m_timdUsageByPoc[poc];
   record.ctus++;
+  uint64_t countedMergeFlagCoded = 0;
+  uint64_t countedMergeFlagZero  = 0;
+  uint64_t countedMergeFlagOne   = 0;
 
   for (const CodingUnit &cu: cs.traverseCUs(ctuArea, ChannelType::LUMA))
   {
@@ -281,17 +286,37 @@ void EncSlice::xAccumulateTimdUsageStats(const CodingStructure &cs, const UnitAr
     {
       record.timdMergeFlagCoded++;
       record.timdMergeFlagCodedSamples += area;
+      countedMergeFlagCoded++;
       if (cu.timdMergeFlag)
       {
         record.timdMergeFlagOne++;
         record.timdMergeFlagOneSamples += area;
+        countedMergeFlagOne++;
       }
       else
       {
         record.timdMergeFlagZero++;
         record.timdMergeFlagZeroSamples += area;
+        countedMergeFlagZero++;
       }
     }
+  }
+
+  const TimdMergeFlagFracBitsStats &cabacStats = m_CABACWriter->getTimdMergeFlagFracBitsStats();
+  CHECK(cabacStats.coded != countedMergeFlagCoded || cabacStats.zero != countedMergeFlagZero ||
+          cabacStats.one != countedMergeFlagOne,
+        "Final TIMD-Merge CABAC flag counts do not match final CU traversal");
+  record.timdMergeFlagFracBits += cabacStats.fracBits;
+  record.timdMergeFlagZeroFracBits += cabacStats.zeroFracBits;
+  record.timdMergeFlagOneFracBits += cabacStats.oneFracBits;
+  for (unsigned ctxId = 0; ctxId < 2; ctxId++)
+  {
+    record.timdMergeFlagCtxCoded[ctxId] += cabacStats.ctxCoded[ctxId];
+    record.timdMergeFlagCtxZero[ctxId] += cabacStats.ctxZero[ctxId];
+    record.timdMergeFlagCtxOne[ctxId] += cabacStats.ctxOne[ctxId];
+    record.timdMergeFlagCtxFracBits[ctxId] += cabacStats.ctxFracBits[ctxId];
+    record.timdMergeFlagCtxZeroFracBits[ctxId] += cabacStats.ctxZeroFracBits[ctxId];
+    record.timdMergeFlagCtxOneFracBits[ctxId] += cabacStats.ctxOneFracBits[ctxId];
   }
 }
 
@@ -325,7 +350,14 @@ void EncSlice::xWriteTimdUsageStats()
             "luma_samples,intra_pred_luma_samples,timd_samples,timd_normal_samples,timdsad_samples,"
             "timd_merge_samples,timd_invalid_samples,timd_merge_available_samples,"
             "timd_merge_not_selected_samples,timd_merge_flag_coded_samples,timd_merge_flag_zero_samples,"
-            "timd_merge_flag_one_samples\n";
+            "timd_merge_flag_one_samples,"
+            "timd_merge_flag_frac_bits,timd_merge_flag_zero_frac_bits,timd_merge_flag_one_frac_bits,"
+            "timd_merge_flag_ctx0_coded,timd_merge_flag_ctx0_zero,timd_merge_flag_ctx0_one,"
+            "timd_merge_flag_ctx0_frac_bits,timd_merge_flag_ctx0_zero_frac_bits,"
+            "timd_merge_flag_ctx0_one_frac_bits,"
+            "timd_merge_flag_ctx1_coded,timd_merge_flag_ctx1_zero,timd_merge_flag_ctx1_one,"
+            "timd_merge_flag_ctx1_frac_bits,timd_merge_flag_ctx1_zero_frac_bits,"
+            "timd_merge_flag_ctx1_one_frac_bits\n";
 
   for (const auto &[poc, record]: m_timdUsageByPoc)
   {
@@ -333,7 +365,7 @@ void EncSlice::xWriteTimdUsageStats()
       ? int64_t(m_encCfg->m_frameSkip) * 2 + int64_t(poc) * m_encCfg->m_temporalSubsampleRatio
       : int64_t(m_encCfg->m_frameSkip) + int64_t(poc) * m_encCfg->m_temporalSubsampleRatio;
 
-    output << 2 << ',' << escapeTimdStatsCsv(m_timdUsageSequence) << ',' << m_encCfg->m_iQP << ','
+    output << 3 << ',' << escapeTimdStatsCsv(m_timdUsageSequence) << ',' << m_encCfg->m_iQP << ','
            << m_pcLib->getLayerId() << ',' << escapeTimdStatsCsv(m_timdUsageShardName) << ','
            << escapeTimdStatsCsv(m_encCfg->m_bitstreamFileName) << ',' << m_encCfg->m_frameSkip << ','
            << m_encCfg->m_framesToBeEncoded << ',' << poc << ',' << sourceFrame << ',' << record.slices << ','
@@ -345,7 +377,15 @@ void EncSlice::xWriteTimdUsageStats()
            << record.timdNormalSamples << ',' << record.timdSadSamples << ',' << record.timdMergeSamples << ','
            << record.timdInvalidSamples << ',' << record.timdMergeAvailableSamples << ','
            << record.timdMergeNotSelectedSamples << ',' << record.timdMergeFlagCodedSamples << ','
-           << record.timdMergeFlagZeroSamples << ',' << record.timdMergeFlagOneSamples << '\n';
+           << record.timdMergeFlagZeroSamples << ',' << record.timdMergeFlagOneSamples << ','
+           << record.timdMergeFlagFracBits << ',' << record.timdMergeFlagZeroFracBits << ','
+           << record.timdMergeFlagOneFracBits << ',' << record.timdMergeFlagCtxCoded[0] << ','
+           << record.timdMergeFlagCtxZero[0] << ',' << record.timdMergeFlagCtxOne[0] << ','
+           << record.timdMergeFlagCtxFracBits[0] << ',' << record.timdMergeFlagCtxZeroFracBits[0] << ','
+           << record.timdMergeFlagCtxOneFracBits[0] << ',' << record.timdMergeFlagCtxCoded[1] << ','
+           << record.timdMergeFlagCtxZero[1] << ',' << record.timdMergeFlagCtxOne[1] << ','
+           << record.timdMergeFlagCtxFracBits[1] << ',' << record.timdMergeFlagCtxZeroFracBits[1] << ','
+           << record.timdMergeFlagCtxOneFracBits[1] << '\n';
   }
   output.close();
   if (!output)
@@ -2358,6 +2398,10 @@ void EncSlice::encodeSlice(Picture *pic, OutputBitstream *pcSubstreams, uint32_t
 
     m_CABACWriter->setBinBuffer(
       getBinVector(ctuXPosInCtus));   // clear the bin counters and prepare for collecting new data for this CTU
+    if (m_timdUsageStatsPrepared)
+    {
+      m_CABACWriter->resetTimdMergeFlagFracBitsStats();
+    }
     m_CABACWriter->coding_tree_unit(cs, ctuArea, pic->m_prevQP, ctuRsAddr);
     m_CABACWriter->setBinBuffer(nullptr);   // done with data collection for this CTU
     xAccumulateTimdUsageStats(cs, ctuArea, pic->m_poc);

@@ -4507,7 +4507,34 @@ void CABACWriter::timd_merge_flag(const CodingUnit &cu)
   }
 
   const unsigned ctxId = cu.lumaSize().area() >= 64 ? 0 : 1;
-  m_binEncoder.encodeBin(cu.timdMergeFlag, Ctx::TimdMergeFlag(ctxId));
+  const unsigned bin   = cu.timdMergeFlag ? 1 : 0;
+  if (m_trackTimdMergeFlagFracBits && m_binEncoder.isEncoding())
+  {
+    const uint64_t fracBits = m_binEncoder.getCtx()
+                                .getFracBitsAcess()
+                                .getFracBitsArray(Ctx::TimdMergeFlag(ctxId))
+                                .intBits[bin];
+    TimdMergeFlagFracBitsStats &stats = m_timdMergeFlagFracBitsStats;
+    stats.coded++;
+    stats.fracBits += fracBits;
+    stats.ctxCoded[ctxId]++;
+    stats.ctxFracBits[ctxId] += fracBits;
+    if (bin)
+    {
+      stats.one++;
+      stats.oneFracBits += fracBits;
+      stats.ctxOne[ctxId]++;
+      stats.ctxOneFracBits[ctxId] += fracBits;
+    }
+    else
+    {
+      stats.zero++;
+      stats.zeroFracBits += fracBits;
+      stats.ctxZero[ctxId]++;
+      stats.ctxZeroFracBits[ctxId] += fracBits;
+    }
+  }
+  m_binEncoder.encodeBin(bin, Ctx::TimdMergeFlag(ctxId));
   DTRACE(g_trace_ctx, D_SYNTAX, "timd_merge_flag() ctx=%d pos=(%d,%d) size=(%d,%d) mode=%d\n", ctxId,
          cu.lumaPos().x, cu.lumaPos().y, cu.lumaSize().width, cu.lumaSize().height, cu.timdMergeFlag);
 }

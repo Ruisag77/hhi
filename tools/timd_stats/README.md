@@ -38,6 +38,12 @@ timd_usage_stats/<sequence>/QP32.csv
 timd_usage_stats/<sequence>/QP37.csv
 ```
 
+It also creates a combined file containing every sequence and QP:
+
+```text
+timd_usage_stats/timd_usage_summary.csv
+```
+
 The supplied RAS launcher overlaps adjacent shards by one source frame. The
 summarizer detects this from `frame_skip + poc`, removes the overlap, and lets
 the later-starting shard own the boundary frame. It reports both the number of
@@ -58,3 +64,20 @@ The summary also separates TIMD-Merge availability from actual syntax cost:
 - `timd_merge_flag_zero`: ordinary-TIMD winners that pay a coded `merge_flag=0`;
 - `timd_merge_flag_one`: selected TIMD-Merge CUs;
 - `timd_merge_loss_without_flag_cus`: available Merge candidates that lost, but whose flag was omitted (normally because TIMDSAD won).
+
+## TIMD-Merge fractional-bit fields
+
+Shard schema version 3 appends fractional-bit statistics measured immediately before each final
+`timd_merge_flag` bin is written. The measurement uses the actual final CABAC context state and VTM's
+fractional-bit table. It is suitable for attributing syntax cost, but it is not a byte-exact difference in
+the terminated arithmetic bitstream.
+
+Raw shard columns ending in `_frac_bits` are integer fixed-point values with `1 << 15` units per bit. They
+are split by flag value and by the two existing TIMD-Merge contexts:
+
+- `ctx0`: luma CU area is at least 64;
+- `ctx1`: luma CU area is less than 64.
+
+The summarizer converts these values to decimal `*_estimated_bits` columns and also reports average
+estimated bits per bin and estimated bits per final luma CU. Schema-2 shards cannot be mixed with the new
+schema, so use a new experiment-specific statistics root when rerunning encodes.
